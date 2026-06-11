@@ -1,0 +1,33 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --app-content-bg: #f0f2f5;
+  --app-tabs-bar-bg: #ffffff;
+  --app-tabs-bar-border: #e8e8e8;
+  --app-tabs-bar-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+  color-scheme: light;
+}
+
+html.dark {
+  --app-content-bg: var(--el-bg-color-page);
+  --app-tabs-bar-bg: var(--el-bg-color);
+  --app-tabs-bar-border: var(--el-border-color-light);
+  --app-tabs-bar-shadow: none;
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', Arial, sans-serif;
+  background-color: var(--app-content-bg);
+  color: var(--el-text-color-primary);
+}
