@@ -138,7 +138,7 @@ async function handleDelete(row: RoleRecord) {
       <el-form-item label="关键词">
         <el-input
           v-model="searchForm.keyword"
-          placeholder="角色名称 / 编码 / 人员 / 页面"
+          placeholder="角色名称 / 编码 / 人员 / 模块 / 页面"
           clearable
           style="width: 260px"
           @keyup.enter="handleSearch"
@@ -180,17 +180,26 @@ async function handleDelete(row: RoleRecord) {
           <span v-else class="text-muted">未关联</span>
         </template>
       </el-table-column>
-      <el-table-column label="页面权限" min-width="260">
+      <el-table-column label="页面权限" min-width="300">
         <template #default="{ row }">
-          <div v-if="row.permissions?.length" class="tag-list">
-            <el-tag
-              v-for="permission in row.permissions"
-              :key="permission.id"
-              size="small"
-              :title="permission.code"
+          <div v-if="row.permissions?.length" class="permission-groups">
+            <div
+              v-for="group in RoleForm.groupPermissionsByModule(row.permissions)"
+              :key="group.module"
+              class="permission-module"
             >
-              {{ RoleForm.formatPermissionLabel(permission) }}
-            </el-tag>
+              <span class="permission-module-label">{{ group.module }}</span>
+              <div class="tag-list">
+                <el-tag
+                  v-for="page in group.pages"
+                  :key="page.pageKey"
+                  size="small"
+                  :title="page.permissions.map((item) => item.code).join('\n')"
+                >
+                  {{ RoleForm.formatPagePermissionSummary(page) }}
+                </el-tag>
+              </div>
+            </div>
           </div>
           <span v-else class="text-muted">未配置</span>
         </template>
@@ -244,12 +253,33 @@ async function handleDelete(row: RoleRecord) {
   gap: 4px;
 }
 
-:deep(.role-table .el-table__body .el-table__row) {
-  height: 48px;
+.permission-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.permission-module {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.permission-module-label {
+  flex-shrink: 0;
+  min-width: 56px;
+  padding-top: 2px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--el-text-color-secondary);
 }
 
 :deep(.role-table .el-table__body .el-table__cell) {
-  padding: 6px 0;
-  vertical-align: middle;
+  padding: 10px 0;
+  vertical-align: top;
+}
+
+:deep(.role-table .el-table__body .el-table__row) {
+  height: auto;
 }
 </style>

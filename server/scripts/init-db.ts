@@ -1,20 +1,22 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { ContactForm } from '../src/models/biz/contact/ContactForm.ts'
-import { ProjectForm } from '../src/models/biz/project/ProjectForm.ts'
-import { PersonnelForm } from '../src/models/personnel/PersonnelForm.ts'
-import { RoleForm } from '../src/models/personnel/RoleForm.ts'
-import { ContactFormPdf } from '../src/models/db/ContactFormPdf.ts'
-import { CONTACT_PDF_DIR } from '../src/models/db/tables.ts'
+import { ContactForm } from '../../src/models/biz/contact/ContactForm.ts'
+import { ProjectForm } from '../../src/models/biz/project/ProjectForm.ts'
+import { PersonnelForm } from '../../src/models/personnel/PersonnelForm.ts'
+import { RoleForm } from '../../src/models/personnel/RoleForm.ts'
+import { ContactFormPdf } from '../../src/models/db/ContactFormPdf.ts'
+import {
+  CONTACT_PDF_ROOT,
+  SERVER_DATAS_DIR,
+  SERVER_DB_PATH,
+  SERVER_SCHEMA_PATH,
+} from '../paths.ts'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const rootDir = path.resolve(__dirname, '..')
-const datasDir = path.join(rootDir, 'datas')
-const dbPath = path.join(datasDir, 'steeltech.db')
-const schemaPath = path.join(datasDir, 'schema.sql')
-const pdfRootDir = path.join(rootDir, CONTACT_PDF_DIR)
+const datasDir = SERVER_DATAS_DIR
+const dbPath = SERVER_DB_PATH
+const schemaPath = SERVER_SCHEMA_PATH
+const pdfRootDir = CONTACT_PDF_ROOT
 
 fs.mkdirSync(datasDir, { recursive: true })
 fs.mkdirSync(pdfRootDir, { recursive: true })
@@ -65,9 +67,11 @@ const insertProjectPersonnel = db.prepare(`
 
 const insertContactForm = db.prepare(`
   INSERT INTO contact_forms (
-    id, title, received_date, urgency, status, content, expect_reply_date, created_at
+    id, title, received_date, urgency, status, content, expect_reply_date,
+    parent_id, root_id, relation_type, sort_order, created_at
   ) VALUES (
-    @id, @title, @received_date, @urgency, @status, @content, @expect_reply_date, @created_at
+    @id, @title, @received_date, @urgency, @status, @content, @expect_reply_date,
+    NULL, @root_id, 'primary', 0, @created_at
   )
 `)
 
@@ -92,15 +96,17 @@ const insertRolePersonnel = db.prepare(`
 `)
 
 const insertContactProject = db.prepare(`
-  INSERT OR IGNORE INTO contact_form_projects (contact_form_id, project_no)
-  VALUES (@contact_form_id, @project_no)
+  INSERT OR IGNORE INTO contact_form_projects (contact_form_id, project_no, source_type)
+  VALUES (@contact_form_id, @project_no, 'own')
 `)
 
 const insertContactPdf = db.prepare(`
   INSERT INTO contact_form_pdfs (
-    id, contact_form_id, file_name, file_path, file_size, mime_type, sort_order, created_at
+    id, contact_form_id, file_name, file_path, file_size, mime_type,
+    attachment_type, sort_order, created_at
   ) VALUES (
-    @id, @contact_form_id, @file_name, @file_path, @file_size, @mime_type, @sort_order, @created_at
+    @id, @contact_form_id, @file_name, @file_path, @file_size, @mime_type,
+    @attachment_type, @sort_order, @created_at
   )
 `)
 
@@ -214,6 +220,7 @@ const seedContacts = db.transaction(() => {
       status: contact.status,
       content: contact.content,
       expect_reply_date: contact.expectReplyDate,
+      root_id: contact.id,
       created_at: contact.createdAt,
     })
 
@@ -233,7 +240,7 @@ const seedContacts = db.transaction(() => {
         createdAt: contact.createdAt,
       })
 
-      const contactPdfDir = path.join(rootDir, CONTACT_PDF_DIR, contact.id)
+      const contactPdfDir = path.join(CONTACT_PDF_ROOT, contact.id)
       fs.mkdirSync(contactPdfDir, { recursive: true })
 
       insertContactPdf.run({
@@ -243,6 +250,7 @@ const seedContacts = db.transaction(() => {
         file_path: pdfRecord.filePath,
         file_size: pdfRecord.fileSize,
         mime_type: pdfRecord.mimeType,
+        attachment_type: index === 0 ? 'primary' : 'supplement',
         sort_order: pdfRecord.sortOrder,
         created_at: pdfRecord.createdAt,
       })

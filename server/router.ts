@@ -1,6 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { handleAuthChangePassword, handleAuthLogin, handleAuthMe } from './handlers/auth'
-import { handleContactList } from './handlers/contacts'
+import {
+  handleContactAppendAttachments,
+  handleContactCreate,
+  handleContactCreateChild,
+  handleContactDelete,
+  handleContactGet,
+  handleContactList,
+  handleContactUpdate,
+} from './handlers/contacts'
 import { handlePersonnelDelete, handlePersonnelList, handlePersonnelUpdate } from './handlers/personnel'
 import {
   handlePermissionList,
@@ -15,7 +23,7 @@ import {
   handleProjectList,
   handleProjectUpdate,
 } from './handlers/projects'
-import { handleSystemConfig, handleSystemPathExists } from './handlers/system'
+import { handleSystemConfig, handleSystemHostDrives, handleSystemLocalIp, handleSystemPathExists } from './handlers/system'
 import { matchRoute, readJsonBody, sendError, type ApiContext } from './utils'
 
 type RouteHandler = (ctx: ApiContext, res: ServerResponse) => Promise<boolean>
@@ -37,8 +45,16 @@ const routes: Array<{ method: string; pattern: string; handler: RouteHandler }> 
   { method: 'POST', pattern: 'projects', handler: handleProjectCreate },
   { method: 'PUT', pattern: 'projects/:projectNo', handler: handleProjectUpdate },
   { method: 'GET', pattern: 'contacts', handler: handleContactList },
+  { method: 'POST', pattern: 'contacts', handler: handleContactCreate },
+  { method: 'GET', pattern: 'contacts/:id', handler: handleContactGet },
+  { method: 'PUT', pattern: 'contacts/:id', handler: handleContactUpdate },
+  { method: 'DELETE', pattern: 'contacts/:id', handler: handleContactDelete },
+  { method: 'POST', pattern: 'contacts/:id/attachments', handler: handleContactAppendAttachments },
+  { method: 'POST', pattern: 'contacts/:parentId/children', handler: handleContactCreateChild },
   { method: 'GET', pattern: 'system/config', handler: handleSystemConfig },
   { method: 'PUT', pattern: 'system/config', handler: handleSystemConfig },
+  { method: 'GET', pattern: 'system/local-ip', handler: handleSystemLocalIp },
+  { method: 'GET', pattern: 'system/host-drives', handler: handleSystemHostDrives },
   { method: 'GET', pattern: 'system/path-exists', handler: handleSystemPathExists },
 ]
 

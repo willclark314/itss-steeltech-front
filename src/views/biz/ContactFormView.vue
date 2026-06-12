@@ -4,11 +4,18 @@ import '@/styles/biz-page-card.css'
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type UploadFile, type UploadUserFile } from 'element-plus'
-import { fetchContactList } from '@/api/contacts'
+import {
+  appendContactAttachments,
+  createChildContact,
+  createContact,
+  deleteContact,
+  fetchContactList,
+  updateContact,
+} from '@/api/contacts'
 import { checkProjectNos, createProject } from '@/api/projects'
 import { usePaginatedList } from '@/composables/usePaginatedList'
 import { ContactForm } from '@/models/biz/contact'
-import type { ContactAttachment, ContactRecord, ContactStatus } from '@/models/biz/contact'
+import type { ContactAttachment, ContactRecord, ContactStatus, ProjectLink } from '@/models/biz/contact'
 import { ProjectForm } from '@/models/biz/project'
 import { BIZ_ROUTES, buildProjectRouteQuery } from '@/models/biz/navigation'
 
@@ -24,9 +31,15 @@ const attachmentDropTargetId = ref('')
 const contactPageRef = ref<HTMLElement | null>(null)
 const dropDialogVisible = ref(false)
 const droppedPdfFiles = ref<File[]>([])
-const dropAction = ref<'create' | 'append'>('create')
+const dropAction = ref<'create' | 'append_attachment' | 'append_contact'>('create')
 const appendTargetId = ref('')
 const appendSearchQuery = ref('')
+const childDialogVisible = ref(false)
+const childParentId = ref('')
+const childParentRecord = ref<ContactRecord | null>(null)
+const childFormRef = ref<FormInstance>()
+const childForm = reactive(ContactForm.createEmptyChildForm())
+const childDroppedFiles = ref<File[]>([])
 
 const dialogTitle = computed(() => (editingId.value ? '编辑联系单' : '新建联系单'))
 
@@ -37,6 +50,9 @@ const searchForm = reactive({
 
 const statusOptions = ContactForm.STATUS_OPTIONS
 const statusMap = ContactForm.STATUS_MAP
+const relationTypeMap = ContactForm.RELATION_TYPE_MAP
+const relationTypeOptions = ContactForm.RELATION_TYPE_OPTIONS
+const projectSourceMap = ContactForm.PROJECT_SOURCE_MAP
 
 const knownProjectNos = ref(new Set<string>())
 const appendSearchResults = ref<ContactRecord[]>([])
@@ -80,7 +96,8 @@ const attachmentTooltip = reactive({
 function openCreateDialogWithAttachments(files: File[]) {
   editingId.value = null
   resetForm()
-  form.attachmentList = ContactForm.filesToAttachmentList(files)
+  form.primaryPdfList = ContactForm.filesToAttachmentList(files.slice(0, 1))
+  form.attachmentList = ContactForm.filesToAttachmentList(files.slice(1))
 
   const firstName = files[0]?.name.replace(/\.pdf$/i, '') || ''
   if (firstName) {
@@ -88,6 +105,36 @@ function openCreateDialogWithAttachments(files: File[]) {
   }
 
   dialogVisible.value = true
+}
+
+function openChildDialog(parent: ContactRecord, files: File[] = []) {
+  childParentId.value = parent.id
+  childParentRecord.value = parent
+  Object.assign(childForm, ContactForm.createEmptyChildForm(parent))
+  childDroppedFiles.value = files
+  childForm.primaryPdfList = ContactForm.filesToAttachmentList(files.slice(0, 1))
+  const firstName = files[0]?.name.replace(/\.pdf$/i, '') || ''
+  if (firstName) childForm.title = firstName
+  childDialogVisible.value = true
+}
+
+function resetChildForm() {
+  Object.assign(childForm, ContactForm.createEmptyChildForm(childParentRecord.value || undefined))
+  childDroppedFiles.value = []
+  childFormRef.value?.clearValidate()
+}
+
+function getProjectLinks(row: ContactRecord): ProjectLink[] {
+  return ContactForm.getProjectLinks(row)
+}
+
+function getRelationMeta(row: ContactRecord) {
+  const type = row.relationType || 'primary'
+  return relationTypeMap[type]
+}
+
+function getProjectTagType(link: ProjectLink) {
+  return projectSourceMap[link.sourceType]?.tagType || 'primary'
 }
 
 function hasFileDrag(event: DragEvent) {
@@ -191,6 +238,25 @@ function handleDropDialogClosed() {
   appendSearchQuery.value = ''
 }
 
+async function resolveAppendTarget() {
+  if (!appendTargetId.value) {
+    const resolvedId = resolveAppendTargetId()
+    if (resolvedId) appendTargetId.value = resolvedId
+  }
+  if (!appendTargetId.value) return null
+
+  let target = appendSearchResults.value.find((item) => item.id === appendTargetId.value)
+  if (!target) {
+    try {
+      const result = await fetchContactList({ keyword: appendTargetId.value, pageSize: 20 })
+      target = result.list.find((item) => item.id === appendTargetId.value)
+    } catch {
+      target = undefined
+    }
+  }
+  return target ?? null
+}
+
 async function handleDropDialogConfirm() {
   const files = [...droppedPdfFiles.value]
   if (!files.length) {
@@ -205,42 +271,29 @@ async function handleDropDialogConfirm() {
     return
   }
 
-  if (!appendTargetId.value) {
-    const resolvedId = resolveAppendTargetId()
-    if (resolvedId) {
-      appendTargetId.value = resolvedId
-    }
-  }
-
-  if (!appendTargetId.value) {
+  const target = await resolveAppendTarget()
+  if (!target) {
     ElMessage.warning('请选择或输入单号、项目号、联系主题以定位联系单')
     return
   }
 
-  let target = appendSearchResults.value.find((item) => item.id === appendTargetId.value)
-  if (!target) {
+  if (dropAction.value === 'append_attachment') {
     try {
-      const result = await fetchContactList({ keyword: appendTargetId.value, pageSize: 1 })
-      target = result.list.find((item) => item.id === appendTargetId.value)
-    } catch {
-      target = undefined
+      const payloads = await ContactForm.filesToUploadPayload(files)
+      await appendContactAttachments(target.id, payloads)
+      dropDialogVisible.value = false
+      handleDropDialogClosed()
+      await loadContacts()
+      ElMessage.success(`附件已追加到联系单 ${target.id}`)
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '追加附件失败')
     }
-  }
-  if (!target) {
-    ElMessage.warning('未找到联系单，请重新选择')
-    return
-  }
-
-  const appended = ContactForm.appendAttachments(target, files)
-  if (!appended) {
-    ElMessage.warning('请拖入 PDF 文件')
     return
   }
 
   dropDialogVisible.value = false
   handleDropDialogClosed()
-  await loadContacts()
-  ElMessage.success(`PDF 已追加到联系单 ${target.id}`)
+  openChildDialog(target, files)
 }
 
 async function handlePageDrop(event: DragEvent) {
@@ -300,11 +353,14 @@ async function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
     return
   }
 
-  patchItem(row.id, (target) => {
-    ContactForm.appendAttachments(target, pdfFiles)
-    return target
-  })
-  ElMessage.success(`PDF 已追加到联系单 ${row.id}`)
+  try {
+    const payloads = await ContactForm.filesToUploadPayload(pdfFiles)
+    const updated = await appendContactAttachments(row.id, payloads)
+    patchItem(row.id, () => updated)
+    ElMessage.success(`附件已追加到联系单 ${row.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '追加附件失败')
+  }
 }
 
 function handleAttachmentChange(file: UploadFile, fileList: UploadUserFile[]) {
@@ -318,6 +374,32 @@ function handleAttachmentChange(file: UploadFile, fileList: UploadUserFile[]) {
 
 function handleAttachmentRemove(_file: UploadFile, fileList: UploadUserFile[]) {
   form.attachmentList = fileList
+}
+
+function handlePrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
+  if (!ContactForm.isPdfFile(file)) {
+    ElMessage.warning('仅支持上传 PDF 文件')
+    form.primaryPdfList = fileList.filter((item) => item.uid !== file.uid)
+    return
+  }
+  form.primaryPdfList = fileList.slice(-1)
+}
+
+function handlePrimaryPdfRemove(_file: UploadFile, fileList: UploadUserFile[]) {
+  form.primaryPdfList = fileList
+}
+
+function handleChildPrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
+  if (!ContactForm.isPdfFile(file)) {
+    ElMessage.warning('仅支持上传 PDF 文件')
+    childForm.primaryPdfList = fileList.filter((item) => item.uid !== file.uid)
+    return
+  }
+  childForm.primaryPdfList = fileList.slice(-1)
+}
+
+function handleChildPrimaryPdfRemove(_file: UploadFile, fileList: UploadUserFile[]) {
+  childForm.primaryPdfList = fileList
 }
 
 function openAttachment(file: ContactAttachment) {
@@ -466,7 +548,11 @@ async function handleReset() {
 }
 
 function getRowClassName({ row }: { row: ContactRecord }) {
-  return row.id === highlightedContactId.value ? 'is-highlighted' : ''
+  const classes: string[] = []
+  if (row.id === highlightedContactId.value) classes.push('is-highlighted')
+  if ((row.sortOrder ?? 0) > 0) classes.push('is-child-row')
+  if (row.relationType === 'cancel') classes.push('is-cancel-row')
+  return classes.join(' ')
 }
 
 function scrollToContact(contactId: string) {
@@ -547,27 +633,75 @@ async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  if (editingId.value) {
-    patchItem(editingId.value, (target) => {
-      ContactForm.wrap(target).update(form, form.attachmentList)
-      return target
-    })
-    ElMessage.success('联系单已更新')
-  } else {
-    clearCache()
-    await loadPage(
-      1,
-      {
-        keyword: searchForm.keyword,
-        status: searchForm.status,
-      },
-      true,
-    )
-    await syncKnownProjectNosFromContacts()
-    ElMessage.success('联系单已提交')
+  try {
+    if (editingId.value) {
+      const updated = await updateContact(editingId.value, {
+        title: form.title,
+        receivedDate: form.receivedDate,
+        urgency: form.urgency,
+        content: form.content,
+        expectReplyDate: form.expectReplyDate,
+        projectNos: [...form.projectNos],
+      })
+      patchItem(editingId.value, () => updated)
+      ElMessage.success('联系单已更新')
+    } else {
+      const primaryFiles = await ContactForm.uploadFilesFromList(form.primaryPdfList)
+      const supplementFiles = await ContactForm.uploadFilesFromList(form.attachmentList)
+      await createContact({
+        title: form.title,
+        receivedDate: form.receivedDate,
+        urgency: form.urgency,
+        content: form.content,
+        expectReplyDate: form.expectReplyDate,
+        projectNos: [...form.projectNos],
+        primaryPdf: primaryFiles[0],
+        supplementFiles,
+      })
+      clearCache()
+      await loadPage(1, { keyword: searchForm.keyword, status: searchForm.status }, true)
+      await syncKnownProjectNosFromContacts()
+      ElMessage.success('联系单已提交')
+    }
+    dialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存联系单失败')
   }
+}
 
-  dialogVisible.value = false
+async function handleChildSubmit() {
+  const valid = await childFormRef.value?.validate().catch(() => false)
+  if (!valid || !childParentId.value) return
+
+  try {
+    const primaryFiles = await ContactForm.uploadFilesFromList(childForm.primaryPdfList)
+    const created = await createChildContact(childParentId.value, {
+      title: childForm.title,
+      receivedDate: childForm.receivedDate,
+      urgency: childForm.urgency,
+      content: childForm.content,
+      relationType: childForm.relationType,
+      projectMode: childForm.projectMode,
+      projectNos:
+        childForm.relationType === 'cancel'
+          ? childForm.cancelledProjectNos
+          : childForm.projectMode === 'inherit'
+            ? []
+            : [...childForm.projectNos],
+      cancelScope: childForm.relationType === 'cancel' ? childForm.cancelScope : undefined,
+      cancelledProjectNos:
+        childForm.relationType === 'cancel' ? [...childForm.cancelledProjectNos] : undefined,
+      primaryPdf: primaryFiles[0],
+    })
+    childDialogVisible.value = false
+    clearCache()
+    await loadPage(page.value, { keyword: searchForm.keyword, status: searchForm.status }, true)
+    await syncKnownProjectNosFromContacts()
+    highlightedContactId.value = created.id
+    ElMessage.success(`已创建${getRelationMeta(created).label} ${created.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建追加联系单失败')
+  }
 }
 
 async function handleCancel(row: ContactRecord) {
@@ -585,11 +719,13 @@ async function handleCancel(row: ContactRecord) {
     return
   }
 
-  patchItem(row.id, (target) => {
-    ContactForm.wrap(target).cancel()
-    return target
-  })
-  ElMessage.success('联系单已取消')
+  try {
+    const updated = await updateContact(row.id, { status: 'cancelled' })
+    patchItem(row.id, () => updated)
+    ElMessage.success('联系单已取消')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '取消联系单失败')
+  }
 }
 
 async function handleDelete(row: ContactRecord) {
@@ -603,10 +739,19 @@ async function handleDelete(row: ContactRecord) {
     return
   }
 
-  clearCache()
-  await loadPage(page.value, { keyword: searchForm.keyword, status: searchForm.status }, true)
-  await syncKnownProjectNosFromContacts()
-  ElMessage.success('联系单已删除')
+  try {
+    await deleteContact(row.id)
+    clearCache()
+    await loadPage(page.value, { keyword: searchForm.keyword, status: searchForm.status }, true)
+    await syncKnownProjectNosFromContacts()
+    ElMessage.success('联系单已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除联系单失败')
+  }
+}
+
+function openAppendChildDialog(row: ContactRecord) {
+  openChildDialog(row)
 }
 </script>
 
@@ -626,7 +771,7 @@ async function handleDelete(row: ContactRecord) {
           <span class="card-title">联系单</span>
           <span class="drag-tip">
             <el-icon class="drag-tip__icon"><Upload /></el-icon>
-            拖拽 PDF 到页面或具体联系单的附件列，松手后选择新建或追加
+            拖拽 PDF 到页面或附件列，可选择新建、追加附件或追加联系单
           </span>
         </div>
         <el-button type="primary" @click="openCreateDialog">新建联系单</el-button>
@@ -671,11 +816,27 @@ async function handleDelete(row: ContactRecord) {
       :row-class-name="getRowClassName"
       height="calc(100vh - 300px)"
     >
-      <el-table-column label="联系单号" width="148" class-name="tag-column">
+      <el-table-column label="联系单号" width="168" class-name="tag-column contact-id-column">
         <template #default="{ row }">
-          <el-tag type="success" size="small" class="cell-tag">
-            {{ row.id }}
-          </el-tag>
+          <div class="contact-id-cell" :class="{ 'is-child': (row.sortOrder ?? 0) > 0 }">
+            <el-tag :type="getRelationMeta(toContactRecord(row)).type" size="small" class="cell-tag">
+              {{ row.id }}
+            </el-tag>
+            <el-tag
+              v-if="getRelationMeta(toContactRecord(row)).label !== '主单'"
+              size="small"
+              class="cell-tag relation-tag"
+              :type="getRelationMeta(toContactRecord(row)).type"
+            >
+              {{ getRelationMeta(toContactRecord(row)).label }}
+            </el-tag>
+            <span
+              v-if="(row.childCount ?? 0) > 0 && (row.sortOrder ?? 0) === 0"
+              class="child-count"
+            >
+              +{{ row.childCount }}
+            </span>
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="title" label="联系主题" min-width="160" show-overflow-tooltip />
@@ -695,14 +856,15 @@ async function handleDelete(row: ContactRecord) {
             </template>
             <div class="project-no-tag-list">
               <el-tag
-                v-for="no in row.projectNos"
-                :key="no"
-                :type="isMissingProjectNo(no) ? 'warning' : 'primary'"
+                v-for="link in getProjectLinks(toContactRecord(row))"
+                :key="link.projectNo"
+                :type="isMissingProjectNo(link.projectNo) ? 'warning' : getProjectTagType(link)"
+                :effect="link.sourceType === 'inherited' ? 'plain' : 'dark'"
                 size="small"
                 class="cell-tag cell-tag--clickable"
-                @click="handleProjectNoClick(no, toContactRecord(row))"
+                @click="handleProjectNoClick(link.projectNo, toContactRecord(row))"
               >
-                {{ no }}
+                {{ link.projectNo }}
               </el-tag>
             </div>
           </el-tooltip>
@@ -733,6 +895,18 @@ async function handleDelete(row: ContactRecord) {
           <el-tag :type="getStatusMeta(row.status).type" size="small" class="cell-tag">
             {{ getStatusMeta(row.status).label }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="正文" width="72" align="center" class-name="attachment-column">
+        <template #default="{ row }">
+          <span
+            v-if="row.primaryPdf?.url"
+            class="pdf-icon-wrap is-clickable"
+            @click="openAttachment(row.primaryPdf)"
+          >
+            <el-icon class="pdf-icon"><Document /></el-icon>
+          </span>
+          <span v-else class="text-muted">-</span>
         </template>
       </el-table-column>
       <el-table-column label="附件" min-width="88" class-name="attachment-column">
@@ -784,7 +958,7 @@ async function handleDelete(row: ContactRecord) {
           {{ ContactForm.toDateOnly(row.createdAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button
             v-if="canEditRow(row)"
@@ -793,6 +967,14 @@ async function handleDelete(row: ContactRecord) {
             @click="openEditDialog(toContactRecord(row))"
           >
             编辑
+          </el-button>
+          <el-button
+            v-if="row.relationType !== 'cancel'"
+            type="success"
+            link
+            @click="openAppendChildDialog(toContactRecord(row))"
+          >
+            追加联系单
           </el-button>
           <el-button
             v-if="canCancelRow(row)"
@@ -844,10 +1026,11 @@ async function handleDelete(row: ContactRecord) {
 
     <el-radio-group v-model="dropAction" class="drop-action-group">
       <el-radio value="create">新建联系单</el-radio>
-      <el-radio value="append">追加到已有联系单</el-radio>
+      <el-radio value="append_attachment">追加附件（同一张单）</el-radio>
+      <el-radio value="append_contact">追加联系单（新建从单）</el-radio>
     </el-radio-group>
 
-    <div v-if="dropAction === 'append'" class="append-target-field">
+    <div v-if="dropAction !== 'create'" class="append-target-field">
       <el-select
         v-model="appendTargetId"
         filterable
@@ -872,7 +1055,12 @@ async function handleDelete(row: ContactRecord) {
         </el-option>
       </el-select>
       <p v-if="selectedAppendTarget" class="append-target-preview">
-        将追加到：{{ selectedAppendTarget.id }} · {{ selectedAppendTarget.title }}
+        <template v-if="dropAction === 'append_attachment'">
+          附件将追加到：{{ selectedAppendTarget.id }} · {{ selectedAppendTarget.title }}
+        </template>
+        <template v-else>
+          将基于：{{ selectedAppendTarget.id }} · {{ selectedAppendTarget.title }} 创建追加联系单
+        </template>
       </p>
     </div>
 
@@ -936,7 +1124,20 @@ async function handleDelete(row: ContactRecord) {
           placeholder="请输入联系内容"
         />
       </el-form-item>
-      <el-form-item label="PDF 附件">
+      <el-form-item label="正文 PDF">
+        <el-upload
+          v-model:file-list="form.primaryPdfList"
+          class="attachment-upload"
+          accept=".pdf,application/pdf"
+          :limit="1"
+          :auto-upload="false"
+          :on-change="handlePrimaryPdfChange"
+          :on-remove="handlePrimaryPdfRemove"
+        >
+          <el-button type="primary" plain>选择正文 PDF</el-button>
+        </el-upload>
+      </el-form-item>
+      <el-form-item label="追加附件">
         <el-upload
           v-model:file-list="form.attachmentList"
           class="attachment-upload"
@@ -946,9 +1147,9 @@ async function handleDelete(row: ContactRecord) {
           :on-change="handleAttachmentChange"
           :on-remove="handleAttachmentRemove"
         >
-          <el-button type="primary" plain>选择 PDF 附件</el-button>
+          <el-button type="primary" plain>选择追加附件</el-button>
           <template #tip>
-            <div class="upload-tip">仅支持 PDF，可上传多个附件，取消联系单后附件仍会保留</div>
+            <div class="upload-tip">追加附件为补充材料；追加联系单请使用列表操作或拖放导入</div>
           </template>
         </el-upload>
       </el-form-item>
@@ -958,6 +1159,107 @@ async function handleDelete(row: ContactRecord) {
       <el-button type="primary" @click="handleSubmit">
         {{ editingId ? '保存' : '提交' }}
       </el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="childDialogVisible"
+    title="追加联系单"
+    width="600px"
+    destroy-on-close
+    @closed="resetChildForm"
+  >
+    <p v-if="childParentRecord" class="append-target-preview">
+      主单：{{ childParentRecord.id }} · {{ childParentRecord.title }}
+    </p>
+    <el-form ref="childFormRef" :model="childForm" :rules="formRules" label-width="100px">
+      <el-form-item label="单据类型">
+        <el-select v-model="childForm.relationType" style="width: 100%">
+          <el-option
+            v-for="item in relationTypeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="联系主题" prop="title">
+        <el-input v-model="childForm.title" placeholder="请输入联系主题" />
+      </el-form-item>
+      <el-form-item label="收单日期" prop="receivedDate">
+        <el-date-picker
+          v-model="childForm.receivedDate"
+          type="date"
+          placeholder="选择收单日期"
+          value-format="YYYY-MM-DD"
+          style="width: 100%"
+        />
+      </el-form-item>
+      <el-form-item v-if="childForm.relationType !== 'cancel'" label="项目关系">
+        <el-radio-group v-model="childForm.projectMode">
+          <el-radio value="inherit">继承主单项目</el-radio>
+          <el-radio value="split">拆分部分项目</el-radio>
+          <el-radio value="append">继承并追加项目</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item
+        v-if="childForm.relationType !== 'cancel' && childForm.projectMode !== 'inherit'"
+        label="项目号"
+      >
+        <el-select
+          v-model="childForm.projectNos"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          placeholder="选择或输入项目号"
+          style="width: 100%"
+        />
+      </el-form-item>
+      <template v-if="childForm.relationType === 'cancel'">
+        <el-form-item label="取消范围">
+          <el-radio-group v-model="childForm.cancelScope">
+            <el-radio value="partial">部分项目</el-radio>
+            <el-radio value="full">整单取消</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="childForm.cancelScope === 'partial'" label="取消项目">
+          <el-select
+            v-model="childForm.cancelledProjectNos"
+            multiple
+            filterable
+            placeholder="选择要取消的项目号"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="no in childParentRecord?.projectNos || []"
+              :key="no"
+              :label="no"
+              :value="no"
+            />
+          </el-select>
+        </el-form-item>
+      </template>
+      <el-form-item label="联系内容" prop="content">
+        <el-input v-model="childForm.content" type="textarea" :rows="3" placeholder="请输入联系内容" />
+      </el-form-item>
+      <el-form-item label="正文 PDF">
+        <el-upload
+          v-model:file-list="childForm.primaryPdfList"
+          class="attachment-upload"
+          accept=".pdf,application/pdf"
+          :limit="1"
+          :auto-upload="false"
+          :on-change="handleChildPrimaryPdfChange"
+          :on-remove="handleChildPrimaryPdfRemove"
+        >
+          <el-button type="primary" plain>选择正文 PDF</el-button>
+        </el-upload>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="childDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="handleChildSubmit">创建</el-button>
     </template>
   </el-dialog>
 
@@ -1037,6 +1339,23 @@ async function handleDelete(row: ContactRecord) {
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.relation-tag {
+  transform: scale(0.92);
+}
+
+.child-count {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+:deep(.is-child-row > td) {
+  background: color-mix(in srgb, var(--el-fill-color-light) 70%, transparent) !important;
+}
+
+:deep(.is-cancel-row > td) {
+  background: color-mix(in srgb, var(--el-color-danger-light-9) 55%, transparent) !important;
 }
 
 .append-option {

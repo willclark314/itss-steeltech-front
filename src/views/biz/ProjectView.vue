@@ -159,6 +159,14 @@ async function handleReset() {
   await loadProjects()
 }
 
+function handlePathUpdated(projectNo: string, localWorkPath: string) {
+  patchItem(projectNo, { localWorkPath })
+  if (isGrouped.value) {
+    const grouped = groupData.value.find((item) => item.projectNo === projectNo)
+    if (grouped) grouped.localWorkPath = localWorkPath
+  }
+}
+
 async function loadPersonnelOptions() {
   try {
     personnelOptions.value = await fetchPersonnelList()
@@ -408,6 +416,7 @@ watch(groupBy, () => {
           :show-personnel="true"
           :highlighted-project-no="highlightedProjectNo"
           @edit="openEditDialog"
+          @path-updated="handlePathUpdated"
         />
       </div>
       <div class="table-pagination">
@@ -435,6 +444,7 @@ watch(groupBy, () => {
             :show-personnel="groupBy !== 'personnel'"
             :highlighted-project-no="highlightedProjectNo"
             @edit="openEditDialog"
+            @path-updated="handlePathUpdated"
           />
         </div>
       </div>

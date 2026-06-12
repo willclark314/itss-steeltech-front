@@ -2,15 +2,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import XLSX from 'xlsx'
-import type { ContactRecord, ContactStatus } from '../src/models/biz/contact/ContactForm.ts'
-import { BusinessSystemConfig } from '../src/models/biz/BusinessSystemConfig.ts'
-import type { ProjectNatureCode, ProjectRecord, ProjectStatus } from '../src/models/biz/project/ProjectForm.ts'
-import { PersonnelForm } from '../src/models/personnel/PersonnelForm.ts'
-import type { PersonnelRecord } from '../src/models/personnel/PersonnelForm.ts'
+import type { ContactRecord, ContactStatus } from '../../src/models/biz/contact/ContactForm.ts'
+import { BusinessSystemConfig } from '../../src/models/biz/BusinessSystemConfig.ts'
+import type { ProjectNatureCode, ProjectRecord, ProjectStatus } from '../../src/models/biz/project/ProjectForm.ts'
+import { PersonnelForm } from '../../src/models/personnel/PersonnelForm.ts'
+import type { PersonnelRecord } from '../../src/models/personnel/PersonnelForm.ts'
+import { PROJECT_ROOT, SERVER_BOARD_XLSX_PATH } from '../paths.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const rootDir = path.resolve(__dirname, '..')
-const xlsxPath = path.join(rootDir, 'datas', '联系单看板.xlsx')
+const rootDir = PROJECT_ROOT
+const xlsxPath = SERVER_BOARD_XLSX_PATH
 const outputDir = path.join(rootDir, 'src', 'data', 'board')
 
 type RawRow = {
@@ -496,7 +497,7 @@ function main() {
     metaPath,
     `${JSON.stringify(
       {
-        source: 'datas/联系单看板.xlsx',
+        source: 'server/datas/联系单看板.xlsx',
         importedAt: new Date().toISOString(),
         rawRows: rawRows.length,
         contacts: contacts.length,

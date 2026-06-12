@@ -2,23 +2,43 @@
 import { computed, ref } from 'vue'
 import { Folder, FolderOpened, FolderRemove } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { checkPathExists } from '@/api/system'
+import { updateProject } from '@/api/projects'
+import {
+  checkPathExists,
+  fetchSystemConfig,
+  generateWorkPath,
+  openWorkPath,
+} from '@/api/system'
 import { ProjectForm } from '@/models/biz/project'
+import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
+import type { ProjectRecord } from '@/models/biz/project'
 
 const props = defineProps<{
-  localWorkPath?: string
+  project: ProjectRecord
+}>()
+
+const emit = defineEmits<{
+  pathUpdated: [projectNo: string, localWorkPath: string]
 }>()
 
 const existsOnDisk = ref<boolean | null>(null)
 const checking = ref(false)
+const creating = ref(false)
 
-const hasPath = computed(() => ProjectForm.hasLocalWorkPath(props.localWorkPath))
-const fullPath = computed(() => ProjectForm.buildLocalWorkPathFull(props.localWorkPath))
+const localWorkPath = computed(() => props.project.localWorkPath)
+const hasPath = computed(() => ProjectForm.hasLocalWorkPath(localWorkPath.value))
+const fullPath = computed(() => ProjectForm.buildLocalWorkPathFull(localWorkPath.value))
 
 const statusText = computed(() => {
   if (!hasPath.value) return '本地路径未创建'
   if (checking.value || existsOnDisk.value === null) return '正在检查本地路径...'
   return existsOnDisk.value ? '本地路径已存在' : '本地路径不存在'
+})
+
+const canCreatePath = computed(() => {
+  if (!hasPath.value) return true
+  if (checking.value || existsOnDisk.value === null) return false
+  return !existsOnDisk.value
 })
 
 const iconComponent = computed(() => {
@@ -32,7 +52,7 @@ const iconClass = computed(() => ({
   'is-empty': !hasPath.value,
   'is-ready': hasPath.value && existsOnDisk.value === true,
   'is-missing': hasPath.value && existsOnDisk.value === false,
-  'is-checking': checking.value,
+  'is-checking': checking.value || creating.value,
 }))
 
 async function verifyPathExists() {
@@ -65,51 +85,119 @@ async function copyPath() {
   }
 }
 
+async function openFolder() {
+  if (!hasPath.value) return
+
+  try {
+    await openWorkPath(localWorkPath.value)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '打开文件夹失败')
+  }
+}
+
+async function createPath() {
+  if (creating.value) return
+
+  const nature = ProjectWorkPath.resolveNatureTemplate(props.project.natures)
+  if (!nature) {
+    ElMessage.warning('请先为项目设置性质（设计或细化）')
+    return
+  }
+
+  creating.value = true
+  try {
+    const config = await fetchSystemConfig()
+    const workPathConfig = config.localWorkPath
+
+    const relativePath =
+      ProjectForm.hasLocalWorkPath(localWorkPath.value)
+        ? ProjectForm.normalizeLocalWorkPath(localWorkPath.value)
+        : ProjectWorkPath.buildRelativePath(props.project, workPathConfig.pathPatterns, nature)
+
+    if (!relativePath) {
+      ElMessage.error('无法根据系统配置生成路径，请检查路径组合规则')
+      return
+    }
+
+    const variables = ProjectWorkPath.buildVariables(props.project)
+    await generateWorkPath({
+      path: relativePath,
+      template: nature,
+      ip: workPathConfig.ip,
+      variables: { ...variables },
+      skipExisting: true,
+    })
+
+    const updated = await updateProject(props.project.projectNo, { localWorkPath: relativePath })
+    emit('pathUpdated', updated.projectNo, updated.localWorkPath)
+    existsOnDisk.value = true
+    ElMessage.success('项目路径已创建')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '创建路径失败')
+  } finally {
+    creating.value = false
+  }
+}
+
 function handleClick(event: MouseEvent) {
   event.stopPropagation()
 }
 
-async function handleContextMenu(event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-  await copyPath()
+async function handleMenuCommand(command: string) {
+  if (command === 'copy') {
+    await copyPath()
+    return
+  }
+  if (command === 'open') {
+    await openFolder()
+    return
+  }
+  if (command === 'create') {
+    await createPath()
+  }
 }
 </script>
 
 <template>
-  <el-tooltip v-if="hasPath" placement="top" :show-after="200">
-    <template #content>
-      <div class="path-tooltip">
-        <div>{{ fullPath }}</div>
-        <div>{{ statusText }}</div>
-        <div>右键复制路径</div>
-      </div>
+  <el-dropdown trigger="contextmenu" @command="handleMenuCommand">
+    <el-tooltip placement="top" :show-after="200">
+      <template #content>
+        <div class="path-tooltip">
+          <template v-if="hasPath">
+            <div>{{ fullPath }}</div>
+            <div>{{ statusText }}</div>
+          </template>
+          <div v-else>本地路径未创建</div>
+          <div>右键打开快捷菜单</div>
+        </div>
+      </template>
+      <button
+        type="button"
+        class="path-cell-btn"
+        :class="iconClass"
+        @mouseenter="handleMouseEnter"
+        @click="handleClick"
+      >
+        <el-icon :size="16">
+          <component :is="iconComponent" />
+        </el-icon>
+      </button>
+    </el-tooltip>
+    <template #dropdown>
+      <el-dropdown-menu>
+        <el-dropdown-item v-if="canCreatePath" command="create" :disabled="creating">
+          创建路径
+        </el-dropdown-item>
+        <el-dropdown-item v-if="hasPath" command="copy">复制路径</el-dropdown-item>
+        <el-dropdown-item
+          v-if="hasPath && existsOnDisk"
+          command="open"
+        >
+          打开文件夹
+        </el-dropdown-item>
+      </el-dropdown-menu>
     </template>
-    <button
-      type="button"
-      class="path-cell-btn"
-      :class="iconClass"
-      @mouseenter="handleMouseEnter"
-      @contextmenu="handleContextMenu"
-      @click="handleClick"
-    >
-      <el-icon :size="16">
-        <component :is="iconComponent" />
-      </el-icon>
-    </button>
-  </el-tooltip>
-
-  <el-tooltip v-else placement="top" :show-after="200" content="本地路径未创建">
-    <span
-      class="path-cell-btn is-empty"
-      aria-label="本地路径未创建"
-      @contextmenu="handleContextMenu"
-    >
-      <el-icon :size="16">
-        <FolderRemove />
-      </el-icon>
-    </span>
-  </el-tooltip>
+  </el-dropdown>
 </template>
 
 <style scoped>
@@ -135,7 +223,6 @@ async function handleContextMenu(event: MouseEvent) {
 }
 
 .path-cell-btn.is-empty {
-  cursor: default;
   color: var(--el-text-color-placeholder);
 }
 

@@ -1,5 +1,6 @@
 import type { ServerResponse } from 'node:http'
 import { getDb } from '../db'
+import { RoleForm } from '../../src/models/personnel/RoleForm.ts'
 import type { ApiContext } from '../utils'
 import { matchRoute, sendError, sendJson } from '../utils'
 
@@ -58,12 +59,11 @@ function getRolePermissions(roleId: string) {
       `SELECT p.id, p.code, p.name, p.module, p.path, p.page_key, p.page_name, p.action
        FROM role_permissions rp
        INNER JOIN permissions p ON p.id = rp.permission_id
-       WHERE rp.role_id = ?
-       ORDER BY p.module, p.code`,
+       WHERE rp.role_id = ?`,
     )
     .all(roleId) as PermissionRow[]
 
-  return rows.map(mapPermission)
+  return RoleForm.sortPermissions(rows.map(mapPermission))
 }
 
 function getRolePersonnel(roleId: string) {
@@ -177,11 +177,11 @@ export async function handlePermissionList(_ctx: ApiContext, res: ServerResponse
   const db = getDb()
   const rows = db
     .prepare(
-      'SELECT id, code, name, module, path, page_key, page_name, action FROM permissions ORDER BY module, page_name, action',
+      'SELECT id, code, name, module, path, page_key, page_name, action FROM permissions',
     )
     .all() as PermissionRow[]
 
-  sendJson(res, 200, rows.map(mapPermission))
+  sendJson(res, 200, RoleForm.sortPermissions(rows.map(mapPermission)))
   return true
 }
 

@@ -29,5 +29,6 @@ src/components.d.ts
 *.njsproj
 *.sln
 *.sw?
-/datas/联系单看板.xlsx
-/datas/files/contact-pdfs
+/server/datas/steeltech.db
+/server/datas/联系单看板.xlsx
+/server/datas/files/contact-pdfs

@@ -10,6 +10,6 @@ export const DB_TABLES = {
   contactFormPdfs: 'contact_form_pdfs',
 } as const
 
-export const DB_PATH = 'datas/steeltech.db'
+export const DB_PATH = 'server/datas/steeltech.db'
 
 export const CONTACT_PDF_DIR = 'datas/files/contact-pdfs'

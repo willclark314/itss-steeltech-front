@@ -1,11 +1,9 @@
 import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { replaceBoardData } from '../server/seed-board.ts'
+import { replaceBoardData } from '../seed-board.ts'
+import { SERVER_DB_PATH } from '../paths.ts'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const dbPath = path.join(path.resolve(__dirname, '..'), 'datas', 'steeltech.db')
+const dbPath = SERVER_DB_PATH
 
 if (!fs.existsSync(dbPath)) {
   throw new Error(`SQLite 数据库不存在: ${dbPath}，请先运行 npm run db:init`)

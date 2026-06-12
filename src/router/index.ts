@@ -59,6 +59,12 @@ const mainChildren: RouteRecordRaw[] = [
     component: () => import('@/views/personnel/RoleView.vue'),
     meta: { title: '角色' },
   },
+  {
+    path: 'system/settings',
+    name: 'SystemSettings',
+    component: () => import('@/views/system/SystemSettingsView.vue'),
+    meta: { title: '全局配置' },
+  },
 ]
 
 if (isDev) {
@@ -68,12 +74,6 @@ if (isDev) {
       name: 'DevPage1',
       component: () => import('@/views/dev/ExplorerData.vue'),
       meta: { title: '浏览器储存' },
-    },
-    {
-      path: 'dev/page2',
-      name: 'DevPage2',
-      component: () => import('@/views/dev/DevPage2View.vue'),
-      meta: { title: '全局配置' },
     },
     {
       path: 'dev/page3',

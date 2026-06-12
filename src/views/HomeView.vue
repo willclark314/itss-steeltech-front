@@ -74,6 +74,17 @@ const systemModules: SystemModule[] = [
       },
     ],
   },
+  {
+    name: '系统设置',
+    summary: '系统级参数与全局配置，对所有用户生效。',
+    links: [
+      {
+        path: '/system/settings',
+        title: '全局配置',
+        description: '本地工作路径、IP 与盘符等系统级参数维护',
+      },
+    ],
+  },
 ]
 
 function goTo(path: string) {
@@ -88,8 +99,7 @@ function goTo(path: string) {
       <div class="intro-panel__body">
         <h2 class="intro-panel__title">欢迎使用 ITSS Steeltech</h2>
         <p class="intro-panel__text">
-          ITSS Steeltech 是面向钢结构技术业务的综合管理平台，涵盖业务协同与人员管理。
-          您可通过顶部系统切换进入不同模块，或点击下方功能地图快速跳转。
+          面向钢结构技术业务的综合管理平台。可通过顶部系统切换进入各模块，或点击下方功能入口快速跳转。
         </p>
       </div>
     </section>
@@ -131,13 +141,16 @@ function goTo(path: string) {
   --home-accent-hover: rgba(24, 144, 255, 0.04);
   --home-shadow: 0 1px 4px rgba(0, 21, 41, 0.06);
 
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .intro-panel {
-  position: relative;
+  flex-shrink: 0;
   display: flex;
   overflow: hidden;
   background: var(--home-panel-bg);
@@ -154,13 +167,14 @@ function goTo(path: string) {
 
 .intro-panel__body {
   flex: 1;
-  padding: 20px 24px;
-  background: linear-gradient(90deg, var(--home-accent-soft), transparent 320px);
+  min-width: 0;
+  padding: 12px 16px;
+  background: linear-gradient(90deg, var(--home-accent-soft), transparent 280px);
 }
 
 .intro-panel__title {
-  margin: 0 0 10px;
-  font-size: 18px;
+  margin: 0 0 4px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--el-text-color-primary);
@@ -168,18 +182,26 @@ function goTo(path: string) {
 
 .intro-panel__text {
   margin: 0;
-  max-width: 720px;
-  line-height: 1.75;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--el-text-color-regular);
 }
 
 .module-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  overflow: hidden;
 }
 
 .module-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: var(--home-panel-bg);
   border: 1px solid var(--home-panel-border);
   border-radius: 4px;
@@ -187,10 +209,11 @@ function goTo(path: string) {
 }
 
 .module-panel__header {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 14px 20px;
+  gap: 2px;
+  padding: 10px 14px;
   background: var(--home-header-bg);
   border-bottom: 1px solid var(--home-panel-border);
 }
@@ -199,7 +222,7 @@ function goTo(path: string) {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
@@ -207,32 +230,39 @@ function goTo(path: string) {
 .module-panel__name::before {
   content: '';
   width: 3px;
-  height: 14px;
+  height: 12px;
   border-radius: 2px;
   background: var(--home-accent);
 }
 
 .module-panel__summary {
   padding-left: 11px;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .feature-map {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-  padding: 16px 20px 20px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 10px 14px 12px;
+  align-content: start;
+  overflow: hidden;
 }
 
 .feature-link {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 8px 10px;
   text-align: left;
   background: var(--home-panel-bg);
   border: 1px solid var(--home-panel-border);
@@ -253,12 +283,12 @@ function goTo(path: string) {
 .feature-link__main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .feature-link__title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--el-text-color-primary);
   transition: color 0.2s;
@@ -270,14 +300,18 @@ function goTo(path: string) {
 
 .feature-link__desc {
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.45;
   color: var(--el-text-color-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .feature-link__arrow {
   flex-shrink: 0;
-  margin-top: 2px;
-  font-size: 14px;
+  margin-top: 1px;
+  font-size: 13px;
   color: var(--el-text-color-placeholder);
   transition:
     color 0.2s,
@@ -287,6 +321,45 @@ function goTo(path: string) {
 .feature-link:hover .feature-link__arrow {
   color: var(--home-accent);
   transform: translateX(2px);
+}
+
+@media (max-height: 760px) {
+  .home-page {
+    gap: 8px;
+  }
+
+  .intro-panel__body {
+    padding: 10px 14px;
+  }
+
+  .intro-panel__title {
+    font-size: 15px;
+  }
+
+  .intro-panel__text {
+    font-size: 12px;
+  }
+
+  .module-list {
+    gap: 8px;
+  }
+
+  .module-panel__header {
+    padding: 8px 12px;
+  }
+
+  .feature-map {
+    gap: 6px;
+    padding: 8px 12px 10px;
+  }
+
+  .feature-link {
+    padding: 6px 8px;
+  }
+
+  .feature-link__desc {
+    -webkit-line-clamp: 1;
+  }
 }
 
 html.dark .home-page {

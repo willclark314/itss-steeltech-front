@@ -103,9 +103,6 @@ export class RoleForm {
     delete: '删除',
   }
 
-  static readonly CRUD_ACTIONS: PermissionAction[] = ['view', 'create', 'update', 'delete']
-  static readonly VIEW_ACTIONS: PermissionAction[] = ['view']
-
   static readonly PAGE_DEFINITIONS: PageDefinition[] = [
     { pageKey: 'home', pageName: '首页', module: '门户', path: '/home', actions: ['view'] },
     {
@@ -157,7 +154,57 @@ export class RoleForm {
       path: '/personnel/leave',
       actions: ['view'],
     },
+    {
+      pageKey: 'system-settings',
+      pageName: '全局配置',
+      module: '系统设置',
+      path: '/system/settings',
+      actions: ['view', 'update'],
+    },
   ]
+
+  static readonly CRUD_ACTIONS: PermissionAction[] = ['view', 'create', 'update', 'delete']
+  static readonly VIEW_ACTIONS: PermissionAction[] = ['view']
+  static readonly ACTION_ORDER: PermissionAction[] = ['view', 'create', 'update', 'delete']
+
+  static readonly MODULE_ORDER: string[] = [
+    ...new Set(RoleForm.PAGE_DEFINITIONS.map((page) => page.module)),
+  ]
+
+  private static readonly PAGE_ORDER_MAP = new Map(
+    RoleForm.PAGE_DEFINITIONS.map((page, index) => [page.pageKey, index]),
+  )
+
+  private static readonly MODULE_ORDER_MAP = new Map(
+    RoleForm.MODULE_ORDER.map((module, index) => [module, index]),
+  )
+
+  static compareModuleOrder(a: string, b: string) {
+    const indexA = RoleForm.MODULE_ORDER_MAP.get(a) ?? Number.MAX_SAFE_INTEGER
+    const indexB = RoleForm.MODULE_ORDER_MAP.get(b) ?? Number.MAX_SAFE_INTEGER
+    if (indexA !== indexB) return indexA - indexB
+    return a.localeCompare(b, 'zh-CN')
+  }
+
+  static comparePageOrder(a: string, b: string) {
+    const indexA = RoleForm.PAGE_ORDER_MAP.get(a) ?? Number.MAX_SAFE_INTEGER
+    const indexB = RoleForm.PAGE_ORDER_MAP.get(b) ?? Number.MAX_SAFE_INTEGER
+    if (indexA !== indexB) return indexA - indexB
+    return a.localeCompare(b, 'zh-CN')
+  }
+
+  static sortPermissions(permissions: PermissionRecord[]): PermissionRecord[] {
+    const actionOrder = RoleForm.ACTION_ORDER
+    return [...permissions].sort((a, b) => {
+      const moduleCompare = RoleForm.compareModuleOrder(a.module, b.module)
+      if (moduleCompare !== 0) return moduleCompare
+
+      const pageCompare = RoleForm.comparePageOrder(a.pageKey, b.pageKey)
+      if (pageCompare !== 0) return pageCompare
+
+      return actionOrder.indexOf(a.action) - actionOrder.indexOf(b.action)
+    })
+  }
 
   static buildPermissionCatalog(): PermissionRecord[] {
     const catalog: PermissionRecord[] = []
@@ -216,7 +263,7 @@ export class RoleForm {
       id: 'ROLE001',
       name: '系统管理员',
       code: 'admin',
-      description: '科室负责人，各页面拥有完整增删改查权限',
+      description: '科室负责人，拥有全部页面权限，含系统设置',
       status: 'active' as RoleStatus,
       permissionIds: [...RoleForm.PERMISSION_SET.ALL],
       personnelIds: ['PER009'],
@@ -341,7 +388,7 @@ export class RoleForm {
         item.description,
         ...item.permissions.map(
           (permission) =>
-            `${permission.pageName} ${permission.name} ${permission.code} ${permission.action}`,
+            `${permission.module} ${permission.pageName} ${permission.name} ${permission.code} ${permission.action}`,
         ),
         ...item.assignedPersonnel.map((person) => `${person.name} ${person.team}`),
       ]
@@ -355,7 +402,7 @@ export class RoleForm {
   static groupPermissionsByPage(permissions: PermissionRecord[]): PagePermissionGroup[] {
     const pageMap = new Map<string, PagePermissionGroup>()
 
-    for (const permission of permissions) {
+    for (const permission of RoleForm.sortPermissions(permissions)) {
       const existing = pageMap.get(permission.pageKey)
       if (existing) {
         existing.permissions.push(permission)
@@ -371,7 +418,7 @@ export class RoleForm {
       })
     }
 
-    const actionOrder: PermissionAction[] = ['view', 'create', 'update', 'delete']
+    const actionOrder = RoleForm.ACTION_ORDER
 
     return [...pageMap.values()]
       .map((page) => ({
@@ -381,8 +428,9 @@ export class RoleForm {
         ),
       }))
       .sort((a, b) => {
-        const moduleCompare = a.module.localeCompare(b.module, 'zh-CN')
-        return moduleCompare !== 0 ? moduleCompare : a.pageName.localeCompare(b.pageName, 'zh-CN')
+        const moduleCompare = RoleForm.compareModuleOrder(a.module, b.module)
+        if (moduleCompare !== 0) return moduleCompare
+        return RoleForm.comparePageOrder(a.pageKey, b.pageKey)
       })
   }
 
@@ -395,14 +443,21 @@ export class RoleForm {
       moduleMap.set(page.module, list)
     }
 
-    return [...moduleMap.entries()].map(([module, pages]) => ({
-      module,
-      pages,
-    }))
+    return [...moduleMap.entries()]
+      .map(([module, pages]) => ({
+        module,
+        pages: [...pages].sort((a, b) => RoleForm.comparePageOrder(a.pageKey, b.pageKey)),
+      }))
+      .sort((a, b) => RoleForm.compareModuleOrder(a.module, b.module))
   }
 
   static formatPermissionLabel(permission: PermissionRecord) {
     return `${permission.pageName}·${permission.name}`
+  }
+
+  static formatPagePermissionSummary(page: PagePermissionGroup) {
+    const actions = page.permissions.map((item) => item.name).join('/')
+    return actions ? `${page.pageName}(${actions})` : page.pageName
   }
 
   static createEmptyForm(): RoleFormData {

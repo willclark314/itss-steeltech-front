@@ -29,6 +29,7 @@ defineExpose({ tableRef })
 
 const emit = defineEmits<{
   edit: [row: ProjectRecord]
+  pathUpdated: [projectNo: string, localWorkPath: string]
 }>()
 
 const router = useRouter()
@@ -73,7 +74,7 @@ function formatContactFormSummary(ids: string[]) {
     :height="tableHeight"
     style="min-width: 1000px"
   >
-    <el-table-column label="联系单编号" width="148" class-name="tag-column">
+    <el-table-column label="联系单编号" width="148" class-name="tag-column contact-form-column">
       <template #default="{ row }">
         <el-tooltip
           v-if="row.contactFormIds?.length"
@@ -82,14 +83,16 @@ function formatContactFormSummary(ids: string[]) {
           :show-after="200"
           :disabled="formatContactFormSummary(row.contactFormIds).length < 16"
         >
-          <el-tag
-            type="success"
-            size="small"
-            class="cell-tag cell-tag--clickable"
-            @click="goToContactForm(row.contactFormIds[0])"
-          >
-            {{ formatContactFormSummary(row.contactFormIds) }}
-          </el-tag>
+          <div class="contact-form-tag-list">
+            <el-tag
+              type="success"
+              size="small"
+              class="cell-tag cell-tag--clickable"
+              @click="goToContactForm(row.contactFormIds[0])"
+            >
+              {{ formatContactFormSummary(row.contactFormIds) }}
+            </el-tag>
+          </div>
         </el-tooltip>
         <span v-else class="text-muted">-</span>
       </template>
@@ -154,7 +157,10 @@ function formatContactFormSummary(ids: string[]) {
       class-name="local-path-column"
     >
       <template #default="{ row }">
-        <LocalWorkPathCell :local-work-path="row.localWorkPath" />
+        <LocalWorkPathCell
+          :project="toProjectRecord(row)"
+          @path-updated="(projectNo, localWorkPath) => emit('pathUpdated', projectNo, localWorkPath)"
+        />
       </template>
     </el-table-column>
     <el-table-column label="操作" width="80" fixed="right">

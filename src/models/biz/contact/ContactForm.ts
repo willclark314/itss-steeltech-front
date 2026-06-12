@@ -2,6 +2,10 @@ import { BOARD_CONTACTS } from '../../../data/board'
 import type { FormRules, UploadRawFile, UploadUserFile } from 'element-plus'
 
 export type ContactStatus = 'pending' | 'processing' | 'done' | 'cancelled'
+export type ContactRelationType = 'primary' | 'supplement' | 'revision' | 'follow_up' | 'cancel'
+export type ProjectSourceType = 'own' | 'inherited' | 'added' | 'cancelled'
+export type ProjectMode = 'inherit' | 'split' | 'append'
+export type CancelScope = 'full' | 'partial'
 
 export interface ContactAttachment {
   id: string
@@ -9,15 +13,29 @@ export interface ContactAttachment {
   url: string
 }
 
+export interface ProjectLink {
+  projectNo: string
+  sourceType: ProjectSourceType
+  sourceContactFormId?: string
+}
+
 export interface ContactRecord {
   id: string
   title: string
   projectNos: string[]
+  projectLinks?: ProjectLink[]
   receivedDate: string
   urgency: string
   status: ContactStatus
   content: string
   expectReplyDate: string
+  parentId?: string
+  rootId?: string
+  relationType?: ContactRelationType
+  sortOrder?: number
+  childCount?: number
+  cancelScope?: CancelScope
+  primaryPdf?: ContactAttachment
   attachments: ContactAttachment[]
   createdAt: string
 }
@@ -30,11 +48,30 @@ export interface ContactFormData {
   content: string
   expectReplyDate: string
   attachmentList: UploadUserFile[]
+  primaryPdfList: UploadUserFile[]
+}
+
+export interface ChildContactFormData {
+  title: string
+  receivedDate: string
+  urgency: string
+  content: string
+  relationType: ContactRelationType
+  projectMode: ProjectMode
+  projectNos: string[]
+  cancelScope: CancelScope
+  cancelledProjectNos: string[]
+  primaryPdfList: UploadUserFile[]
 }
 
 export interface ContactFilterParams {
   keyword?: string
   status?: string
+}
+
+export interface PdfUploadPayload {
+  fileName: string
+  content: string
 }
 
 export class ContactForm {
@@ -44,6 +81,34 @@ export class ContactForm {
     DONE: 'done',
     CANCELLED: 'cancelled',
   } as const
+
+  static readonly RELATION_TYPE_OPTIONS = [
+    { label: '补充单', value: 'supplement' as const },
+    { label: '变更单', value: 'revision' as const },
+    { label: '跟进单', value: 'follow_up' as const },
+    { label: '取消单', value: 'cancel' as const },
+  ]
+
+  static readonly RELATION_TYPE_MAP: Record<
+    ContactRelationType,
+    { label: string; type: 'success' | 'warning' | 'danger' | 'info' | 'primary' }
+  > = {
+    primary: { label: '主单', type: 'success' },
+    supplement: { label: '补充单', type: 'primary' },
+    revision: { label: '变更单', type: 'warning' },
+    follow_up: { label: '跟进单', type: 'info' },
+    cancel: { label: '取消单', type: 'danger' },
+  }
+
+  static readonly PROJECT_SOURCE_MAP: Record<
+    ProjectSourceType,
+    { label: string; tagType: 'primary' | 'success' | 'warning' | 'info' | 'danger' }
+  > = {
+    own: { label: '自有', tagType: 'primary' },
+    inherited: { label: '继承', tagType: 'info' },
+    added: { label: '新增', tagType: 'success' },
+    cancelled: { label: '取消', tagType: 'danger' },
+  }
 
   static readonly STATUS_OPTIONS = [
     { label: '全部', value: '' },
@@ -95,6 +160,10 @@ export class ContactForm {
     return this.record.status
   }
 
+  get isChildRow() {
+    return (this.record.sortOrder ?? 0) > 0
+  }
+
   canEdit() {
     return this.record.status !== ContactForm.STATUS.CANCELLED
   }
@@ -118,7 +187,9 @@ export class ContactForm {
     return {
       ...record,
       projectNos: [...(record.projectNos || [])],
+      projectLinks: (record.projectLinks || []).map((item) => ({ ...item })),
       attachments: (record.attachments || []).map((file) => ({ ...file })),
+      primaryPdf: record.primaryPdf ? { ...record.primaryPdf } : undefined,
     }
   }
 
@@ -157,6 +228,22 @@ export class ContactForm {
       content: '',
       expectReplyDate: '',
       attachmentList: [],
+      primaryPdfList: [],
+    }
+  }
+
+  static createEmptyChildForm(parent?: ContactRecord): ChildContactFormData {
+    return {
+      title: '',
+      receivedDate: ContactForm.formatDate(),
+      urgency: parent?.urgency || '普通',
+      content: '',
+      relationType: 'supplement',
+      projectMode: 'inherit',
+      projectNos: [...(parent?.projectNos || [])],
+      cancelScope: 'partial',
+      cancelledProjectNos: [],
+      primaryPdfList: [],
     }
   }
 
@@ -169,7 +256,17 @@ export class ContactForm {
       content: record.content || '',
       expectReplyDate: record.expectReplyDate || '',
       attachmentList: ContactForm.toUploadFileList(record.attachments),
+      primaryPdfList: ContactForm.toUploadFileList(record.primaryPdf ? [record.primaryPdf] : []),
     }
+  }
+
+  static sortForDisplay(records: ContactRecord[]) {
+    return [...records].sort((a, b) => {
+      const rootA = a.rootId || a.id
+      const rootB = b.rootId || b.id
+      if (rootA !== rootB) return rootB.localeCompare(rootA)
+      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+    })
   }
 
   static filter(records: ContactRecord[], { keyword = '', status = '' }: ContactFilterParams = {}) {
@@ -196,27 +293,6 @@ export class ContactForm {
     return `DTP${yy}${mm}${dd}${seq}`
   }
 
-  static createRecord(
-    form: ContactFormData,
-    existingCount: number,
-    attachmentList: UploadUserFile[],
-  ): ContactRecord {
-    const now = new Date()
-
-    return {
-      id: ContactForm.generateId(existingCount),
-      title: form.title,
-      projectNos: [...form.projectNos],
-      receivedDate: form.receivedDate,
-      urgency: form.urgency,
-      status: ContactForm.STATUS.PENDING,
-      content: form.content,
-      expectReplyDate: form.expectReplyDate,
-      attachments: ContactForm.normalizeAttachments(attachmentList),
-      createdAt: ContactForm.formatDateTime(now),
-    }
-  }
-
   static applyForm(
     record: ContactRecord,
     form: ContactFormData,
@@ -240,6 +316,23 @@ export class ContactForm {
 
   static extractPdfFilesFromDrop(dataTransfer: DataTransfer) {
     return [...dataTransfer.files].filter((file) => ContactForm.isPdfFile(file))
+  }
+
+  static async fileToBase64(file: File): Promise<PdfUploadPayload> {
+    const buffer = await file.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]!)
+    }
+    return {
+      fileName: file.name,
+      content: btoa(binary),
+    }
+  }
+
+  static async filesToUploadPayload(files: File[]): Promise<PdfUploadPayload[]> {
+    return Promise.all(files.map((file) => ContactForm.fileToBase64(file)))
   }
 
   static filesToAttachmentList(files: File[]): UploadUserFile[] {
@@ -273,14 +366,11 @@ export class ContactForm {
     }))
   }
 
-  static appendAttachments(record: ContactRecord, files: File[]) {
-    const pdfFiles = files.filter((file) => ContactForm.isPdfFile(file))
-    if (!pdfFiles.length) return false
-
-    const existingList = ContactForm.toUploadFileList(record.attachments)
-    const mergedList = [...existingList, ...ContactForm.filesToAttachmentList(pdfFiles)]
-    record.attachments = ContactForm.normalizeAttachments(mergedList)
-    return true
+  static async uploadFilesFromList(fileList: UploadUserFile[]): Promise<PdfUploadPayload[]> {
+    const files = fileList
+      .map((item) => item.raw)
+      .filter((raw): raw is UploadRawFile => raw instanceof File)
+    return ContactForm.filesToUploadPayload(files)
   }
 
   static matchContactKeyword(record: ContactRecord, keyword: string) {
@@ -296,5 +386,13 @@ export class ContactForm {
 
   static findByKeyword(records: ContactRecord[], keyword: string) {
     return records.filter((record) => ContactForm.matchContactKeyword(record, keyword))
+  }
+
+  static getProjectLinks(record: ContactRecord): ProjectLink[] {
+    if (record.projectLinks?.length) return record.projectLinks
+    return (record.projectNos || []).map((projectNo) => ({
+      projectNo,
+      sourceType: 'own',
+    }))
   }
 }

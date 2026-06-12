@@ -1,5 +1,5 @@
 -- ITSS Steeltech 本地开发 SQLite 结构
--- 数据库文件：datas/steeltech.db
+-- 数据库文件：server/datas/steeltech.db
 
 PRAGMA foreign_keys = ON;
 
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS project_personnel (
 CREATE INDEX IF NOT EXISTS idx_project_personnel_project_no ON project_personnel (project_no);
 CREATE INDEX IF NOT EXISTS idx_project_personnel_personnel_id ON project_personnel (personnel_id);
 
--- 联系单（不含 PDF，PDF 见 contact_form_pdfs）
+-- 联系单（一条记录 = 一张独立联系单；PDF 见 contact_form_pdfs）
 CREATE TABLE IF NOT EXISTS contact_forms (
   id                TEXT PRIMARY KEY,
   title             TEXT NOT NULL,
@@ -155,26 +155,39 @@ CREATE TABLE IF NOT EXISTS contact_forms (
   status            TEXT NOT NULL DEFAULT 'pending',
   content           TEXT,
   expect_reply_date TEXT,
+  parent_id         TEXT,
+  root_id           TEXT NOT NULL,
+  relation_type     TEXT NOT NULL DEFAULT 'primary',
+  sort_order        INTEGER NOT NULL DEFAULT 0,
+  cancel_scope      TEXT,
   created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  FOREIGN KEY (parent_id) REFERENCES contact_forms (id) ON DELETE SET NULL,
+  CHECK (relation_type IN ('primary', 'supplement', 'revision', 'follow_up', 'cancel')),
+  CHECK (cancel_scope IS NULL OR cancel_scope IN ('full', 'partial'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_contact_forms_status ON contact_forms (status);
 CREATE INDEX IF NOT EXISTS idx_contact_forms_received_date ON contact_forms (received_date);
+CREATE INDEX IF NOT EXISTS idx_contact_forms_root_sort ON contact_forms (root_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_contact_forms_parent ON contact_forms (parent_id);
 
--- 联系单与项目关联（多对多）
+-- 联系单与项目关联（多对多，带来源语义）
 CREATE TABLE IF NOT EXISTS contact_form_projects (
-  contact_form_id TEXT NOT NULL,
-  project_no      TEXT NOT NULL,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  contact_form_id         TEXT NOT NULL,
+  project_no              TEXT NOT NULL,
+  source_type             TEXT NOT NULL DEFAULT 'own',
+  source_contact_form_id  TEXT,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   PRIMARY KEY (contact_form_id, project_no),
   FOREIGN KEY (contact_form_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
-  FOREIGN KEY (project_no) REFERENCES projects (project_no) ON DELETE CASCADE
+  FOREIGN KEY (project_no) REFERENCES projects (project_no) ON DELETE CASCADE,
+  CHECK (source_type IN ('own', 'inherited', 'added', 'cancelled'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_cfp_project_no ON contact_form_projects (project_no);
 
--- 联系单 PDF 附件（独立业务表）
+-- 联系单 PDF（primary=本体，supplement=追加附件）
 CREATE TABLE IF NOT EXISTS contact_form_pdfs (
   id              TEXT PRIMARY KEY,
   contact_form_id TEXT NOT NULL,
@@ -182,9 +195,27 @@ CREATE TABLE IF NOT EXISTS contact_form_pdfs (
   file_path       TEXT NOT NULL,
   file_size       INTEGER,
   mime_type       TEXT NOT NULL DEFAULT 'application/pdf',
+  attachment_type TEXT NOT NULL DEFAULT 'supplement',
   sort_order      INTEGER NOT NULL DEFAULT 0,
+  remark          TEXT,
   created_at      TEXT NOT NULL,
-  FOREIGN KEY (contact_form_id) REFERENCES contact_forms (id) ON DELETE CASCADE
+  FOREIGN KEY (contact_form_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
+  CHECK (attachment_type IN ('primary', 'supplement'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_contact_form_pdfs_contact_id ON contact_form_pdfs (contact_form_id);
+
+-- 取消联系单对项目关联的审计
+CREATE TABLE IF NOT EXISTS contact_form_project_cancellations (
+  id                TEXT PRIMARY KEY,
+  cancel_contact_id TEXT NOT NULL,
+  target_contact_id TEXT NOT NULL,
+  project_no        TEXT NOT NULL,
+  cancelled_at      TEXT NOT NULL,
+  FOREIGN KEY (cancel_contact_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
+  FOREIGN KEY (target_contact_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
+  FOREIGN KEY (project_no) REFERENCES projects (project_no) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cfpc_cancel ON contact_form_project_cancellations (cancel_contact_id);
+CREATE INDEX IF NOT EXISTS idx_cfpc_target ON contact_form_project_cancellations (target_contact_id);

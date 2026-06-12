@@ -4,6 +4,8 @@ import { CONTACT_PDF_DIR, DB_TABLES } from './tables'
  * 联系单 PDF 附件（独立业务模型）
  * 与 contact_forms 通过 contact_form_id 关联，一对多
  */
+export type AttachmentType = 'primary' | 'supplement'
+
 export interface ContactFormPdfRecord {
   id: string
   contactFormId: string
@@ -11,7 +13,9 @@ export interface ContactFormPdfRecord {
   filePath: string
   fileSize: number | null
   mimeType: string
+  attachmentType: AttachmentType
   sortOrder: number
+  remark?: string
   createdAt: string
 }
 
@@ -22,7 +26,9 @@ export type ContactFormPdfRow = {
   file_path: string
   file_size: number | null
   mime_type: string
+  attachment_type: AttachmentType
   sort_order: number
+  remark?: string | null
   created_at: string
 }
 
@@ -42,7 +48,9 @@ export class ContactFormPdf {
       filePath: row.file_path,
       fileSize: row.file_size,
       mimeType: row.mime_type,
+      attachmentType: row.attachment_type || 'supplement',
       sortOrder: row.sort_order,
+      remark: row.remark || undefined,
       createdAt: row.created_at,
     }
   }
@@ -55,7 +63,9 @@ export class ContactFormPdf {
       file_path: record.filePath,
       file_size: record.fileSize,
       mime_type: record.mimeType,
+      attachment_type: record.attachmentType,
       sort_order: record.sortOrder,
+      remark: record.remark ?? null,
       created_at: record.createdAt,
     }
   }
@@ -65,6 +75,7 @@ export class ContactFormPdf {
     contactFormId: string
     fileName: string
     fileSize?: number | null
+    attachmentType?: AttachmentType
     sortOrder?: number
     createdAt?: string
   }): ContactFormPdfRecord {
@@ -75,6 +86,7 @@ export class ContactFormPdf {
       filePath: ContactFormPdf.buildFilePath(params.contactFormId, params.fileName),
       fileSize: params.fileSize ?? null,
       mimeType: ContactFormPdf.MIME_TYPE,
+      attachmentType: params.attachmentType ?? 'supplement',
       sortOrder: params.sortOrder ?? 0,
       createdAt: params.createdAt ?? new Date().toISOString().slice(0, 19).replace('T', ' '),
     }

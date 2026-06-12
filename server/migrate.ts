@@ -325,6 +325,24 @@ function seedDefaultRolesIfEmpty(db: Database.Database) {
   seedRoleSamples(db)
 }
 
+function syncPermissionCatalog(db: Database.Database) {
+  seedPermissions(db)
+
+  const adminRole = db
+    .prepare("SELECT id FROM roles WHERE code = 'admin' LIMIT 1")
+    .get() as { id: string } | undefined
+  if (!adminRole) return
+
+  const insertRolePermission = db.prepare(
+    'INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
+  )
+  for (const permission of RoleForm.PERMISSION_CATALOG) {
+    if (permission.pageKey === 'system-settings') {
+      insertRolePermission.run(adminRole.id, permission.id)
+    }
+  }
+}
+
 function migrateActionBasedPermissions(db: Database.Database) {
   if (!tableExists(db, 'permissions')) return
 
@@ -339,6 +357,11 @@ function migrateActionBasedPermissions(db: Database.Database) {
   ).count
 
   if (hasActionModel && permissionCount === expectedCount) return
+
+  if (hasActionModel && permissionCount < expectedCount) {
+    syncPermissionCatalog(db)
+    return
+  }
 
   db.exec('DELETE FROM role_personnel')
   db.exec('DELETE FROM role_permissions')
@@ -378,6 +401,71 @@ function migrateSystemSettingsTable(db: Database.Database) {
   `)
 }
 
+function migrateContactFormRelations(db: Database.Database) {
+  if (!tableExists(db, 'contact_forms')) return
+
+  const columns = getColumnNames(db, 'contact_forms')
+  if (!columns.has('parent_id')) {
+    db.exec(`ALTER TABLE contact_forms ADD COLUMN parent_id TEXT`)
+  }
+  if (!columns.has('root_id')) {
+    db.exec(`ALTER TABLE contact_forms ADD COLUMN root_id TEXT`)
+  }
+  if (!columns.has('relation_type')) {
+    db.exec(`ALTER TABLE contact_forms ADD COLUMN relation_type TEXT NOT NULL DEFAULT 'primary'`)
+  }
+  if (!columns.has('sort_order')) {
+    db.exec(`ALTER TABLE contact_forms ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+  }
+  if (!columns.has('cancel_scope')) {
+    db.exec(`ALTER TABLE contact_forms ADD COLUMN cancel_scope TEXT`)
+  }
+
+  db.exec(`UPDATE contact_forms SET root_id = id WHERE IFNULL(root_id, '') = ''`)
+  db.exec(`UPDATE contact_forms SET relation_type = 'primary' WHERE IFNULL(relation_type, '') = ''`)
+  db.exec(`UPDATE contact_forms SET sort_order = 0 WHERE sort_order IS NULL`)
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_contact_forms_root_sort ON contact_forms (root_id, sort_order)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_contact_forms_parent ON contact_forms (parent_id)`)
+
+  const projectColumns = getColumnNames(db, 'contact_form_projects')
+  if (!projectColumns.has('source_type')) {
+    db.exec(`ALTER TABLE contact_form_projects ADD COLUMN source_type TEXT NOT NULL DEFAULT 'own'`)
+  }
+  if (!projectColumns.has('source_contact_form_id')) {
+    db.exec(`ALTER TABLE contact_form_projects ADD COLUMN source_contact_form_id TEXT`)
+  }
+  db.exec(`UPDATE contact_form_projects SET source_type = 'own' WHERE IFNULL(source_type, '') = ''`)
+
+  const pdfColumns = getColumnNames(db, 'contact_form_pdfs')
+  if (!pdfColumns.has('attachment_type')) {
+    db.exec(`ALTER TABLE contact_form_pdfs ADD COLUMN attachment_type TEXT NOT NULL DEFAULT 'supplement'`)
+  }
+  if (!pdfColumns.has('remark')) {
+    db.exec(`ALTER TABLE contact_form_pdfs ADD COLUMN remark TEXT`)
+  }
+  db.exec(`
+    UPDATE contact_form_pdfs
+    SET attachment_type = CASE WHEN sort_order = 0 THEN 'primary' ELSE 'supplement' END
+    WHERE IFNULL(attachment_type, '') = ''
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_form_project_cancellations (
+      id                TEXT PRIMARY KEY,
+      cancel_contact_id TEXT NOT NULL,
+      target_contact_id TEXT NOT NULL,
+      project_no        TEXT NOT NULL,
+      cancelled_at      TEXT NOT NULL,
+      FOREIGN KEY (cancel_contact_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
+      FOREIGN KEY (target_contact_id) REFERENCES contact_forms (id) ON DELETE CASCADE,
+      FOREIGN KEY (project_no) REFERENCES projects (project_no) ON DELETE CASCADE
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cfpc_cancel ON contact_form_project_cancellations (cancel_contact_id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cfpc_target ON contact_form_project_cancellations (target_contact_id)`)
+}
+
 export function runMigrations(db: Database.Database) {
   migrateProjectsTable(db)
   migrateProjectRelationTables(db)
@@ -391,4 +479,5 @@ export function runMigrations(db: Database.Database) {
   migrateActionBasedPermissions(db)
   migrateObsoleteRoles(db)
   migrateBoardBizData(db)
+  migrateContactFormRelations(db)
 }

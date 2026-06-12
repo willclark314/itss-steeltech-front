@@ -3,17 +3,13 @@ import { getDb } from './db'
 
 const SETTINGS_KEY = 'local_work_path'
 
-let cachedConfig: LocalWorkPathConfig = {
-  ip: BusinessSystemConfig.LOCAL_WORK_PATH.ip,
-  drive: BusinessSystemConfig.LOCAL_WORK_PATH.drive,
-}
+let cachedConfig: LocalWorkPathConfig = BusinessSystemConfig.normalizeLocalWorkPathConfig(
+  BusinessSystemConfig.LOCAL_WORK_PATH,
+)
 let loaded = false
 
-function normalizeConfig(config: LocalWorkPathConfig): LocalWorkPathConfig {
-  return {
-    ip: config.ip.trim(),
-    drive: BusinessSystemConfig.normalizeDrive(config.drive),
-  }
+function normalizeConfig(config: Partial<LocalWorkPathConfig>): LocalWorkPathConfig {
+  return BusinessSystemConfig.normalizeLocalWorkPathConfig(config)
 }
 
 export function getLocalWorkPathConfig() {
@@ -34,14 +30,13 @@ export function loadSystemConfigFromDb() {
       const parsed = JSON.parse(row.value) as Partial<LocalWorkPathConfig>
       cachedConfig = normalizeConfig({
         ip: String(parsed.ip ?? BusinessSystemConfig.LOCAL_WORK_PATH.ip),
+        ips: parsed.ips,
         drive: String(parsed.drive ?? BusinessSystemConfig.LOCAL_WORK_PATH.drive),
+        pathPatterns: parsed.pathPatterns,
       })
     }
   } catch {
-    cachedConfig = {
-      ip: BusinessSystemConfig.LOCAL_WORK_PATH.ip,
-      drive: BusinessSystemConfig.LOCAL_WORK_PATH.drive,
-    }
+    cachedConfig = normalizeConfig(BusinessSystemConfig.LOCAL_WORK_PATH)
   } finally {
     loaded = true
   }

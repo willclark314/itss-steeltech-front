@@ -103,15 +103,17 @@ export function seedBoardBizData(db: Database.Database) {
 
   const insertContactForm = db.prepare(`
     INSERT INTO contact_forms (
-      id, title, received_date, urgency, status, content, expect_reply_date, created_at
+      id, title, received_date, urgency, status, content, expect_reply_date,
+      parent_id, root_id, relation_type, sort_order, created_at
     ) VALUES (
-      @id, @title, @received_date, @urgency, @status, @content, @expect_reply_date, @created_at
+      @id, @title, @received_date, @urgency, @status, @content, @expect_reply_date,
+      NULL, @root_id, 'primary', 0, @created_at
     )
   `)
 
   const insertContactProject = db.prepare(`
-    INSERT OR IGNORE INTO contact_form_projects (contact_form_id, project_no)
-    VALUES (@contact_form_id, @project_no)
+    INSERT OR IGNORE INTO contact_form_projects (contact_form_id, project_no, source_type)
+    VALUES (@contact_form_id, @project_no, 'own')
   `)
 
   const projectNos = new Set(ProjectForm.DEFAULT_SAMPLES.map((item) => item.projectNo))
@@ -155,6 +157,7 @@ export function seedBoardBizData(db: Database.Database) {
         status: contact.status,
         content: contact.content,
         expect_reply_date: contact.expectReplyDate,
+        root_id: contact.id,
         created_at: contact.createdAt,
       })
 

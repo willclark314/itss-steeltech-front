@@ -13,7 +13,7 @@ const MENU_SIDE_PADDING = 16
 const collapsedAsideWidth = MENU_ICON_WIDTH + MENU_SIDE_PADDING * 2
 const asideWidth = computed(() => (isCollapsed.value ? `${collapsedAsideWidth}px` : '220px'))
 
-type SystemId = 'production' | 'business' | 'personnel' | 'development'
+type SystemId = 'production' | 'business' | 'personnel' | 'system' | 'development'
 
 interface MenuItem {
   path: string
@@ -28,6 +28,7 @@ const systems = computed(() => {
     { id: 'production', name: '门户' },
     { id: 'business', name: '业务系统' },
     { id: 'personnel', name: '人员系统' },
+    { id: 'system', name: '系统设置' },
   ]
   if (isDev) {
     list.push({ id: 'development', name: '开发' })
@@ -37,6 +38,7 @@ const systems = computed(() => {
 
 function resolveSystemFromPath(path: string): SystemId {
   if (path.startsWith('/dev')) return 'development'
+  if (path.startsWith('/system')) return 'system'
   if (path.startsWith('/business')) return 'business'
   if (path.startsWith('/personnel')) return 'personnel'
   if (path.startsWith('/portal') || path === '/home') return 'production'
@@ -60,10 +62,12 @@ const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
     { path: '/personnel/role', title: '角色', icon: 'Key' },
     { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
   ],
+  system: [
+    { path: '/system/settings', title: '全局配置', icon: 'Setting' },
+  ],
   development: isDev
     ? [
         { path: '/dev/page1', title: '浏览器储存', icon: 'Document' },
-        { path: '/dev/page2', title: '全局配置', icon: 'Setting' },
         { path: '/dev/page3', title: '开发页面3', icon: 'Folder' },
         { path: '/dev/login', title: '登录页面', icon: 'User' },
         { path: '/dev/error', title: '错误页面', icon: 'Warning' },

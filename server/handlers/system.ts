@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import type { ServerResponse } from 'node:http'
 import { BusinessSystemConfig } from '../../src/models/biz/BusinessSystemConfig.ts'
+import { getLocalIPv4Addresses, listHostDrives } from '../network-host.ts'
 import {
   getLocalWorkPathConfig,
   saveLocalWorkPathConfig,
@@ -24,16 +25,27 @@ function parseLocalWorkPathPayload(body: unknown) {
     throw new Error('请求体格式错误')
   }
 
-  const payload = body as { localWorkPath?: { ip?: unknown; drive?: unknown } }
-  const ip = String(payload.localWorkPath?.ip ?? '').trim()
+  const payload = body as {
+    localWorkPath?: {
+      ip?: unknown
+      ips?: unknown
+      drive?: unknown
+      pathPatterns?: { design?: string; detail?: string }
+    }
+  }
   const drive = String(payload.localWorkPath?.drive ?? '').trim()
 
-  if (!ip) throw new Error('文件服务器 IP 不能为空')
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) throw new Error('IP 格式不正确')
   if (!drive) throw new Error('默认盘符不能为空')
   if (!/^[A-Za-z]$/.test(drive)) throw new Error('盘符为单个字母')
 
-  return saveLocalWorkPathConfig({ ip, drive })
+  return saveLocalWorkPathConfig(
+    BusinessSystemConfig.normalizeLocalWorkPathConfig({
+      ip: String(payload.localWorkPath?.ip ?? ''),
+      ips: payload.localWorkPath?.ips,
+      drive,
+      pathPatterns: payload.localWorkPath?.pathPatterns,
+    }),
+  )
 }
 
 export async function handleSystemConfig(ctx: ApiContext, res: ServerResponse) {
@@ -52,6 +64,30 @@ export async function handleSystemConfig(ctx: ApiContext, res: ServerResponse) {
     localWorkPath: getLocalWorkPathConfig(),
   })
   return true
+}
+
+export async function handleSystemLocalIp(_ctx: ApiContext, res: ServerResponse) {
+  sendJson(res, 200, {
+    ips: getLocalIPv4Addresses(),
+  })
+  return true
+}
+
+export async function handleSystemHostDrives(ctx: ApiContext, res: ServerResponse) {
+  const ip = (ctx.query.get('ip') || '').trim()
+  if (!ip) {
+    sendError(res, 400, 'IP 不能为空')
+    return true
+  }
+
+  try {
+    const result = await listHostDrives(ip)
+    sendJson(res, 200, result)
+    return true
+  } catch (error) {
+    sendError(res, 400, error instanceof Error ? error.message : '获取驱动列表失败')
+    return true
+  }
 }
 
 export async function handleSystemPathExists(ctx: ApiContext, res: ServerResponse) {
