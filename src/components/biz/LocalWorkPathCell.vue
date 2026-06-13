@@ -7,7 +7,6 @@ import {
   checkPathExists,
   fetchSystemConfig,
   generateWorkPath,
-  openWorkPath,
 } from '@/api/system'
 import { ProjectForm } from '@/models/biz/project'
 import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
@@ -85,16 +84,6 @@ async function copyPath() {
   }
 }
 
-async function openFolder() {
-  if (!hasPath.value) return
-
-  try {
-    await openWorkPath(localWorkPath.value)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '打开文件夹失败')
-  }
-}
-
 async function createPath() {
   if (creating.value) return
 
@@ -148,10 +137,6 @@ async function handleMenuCommand(command: string) {
     await copyPath()
     return
   }
-  if (command === 'open') {
-    await openFolder()
-    return
-  }
   if (command === 'create') {
     await createPath()
   }
@@ -159,18 +144,18 @@ async function handleMenuCommand(command: string) {
 </script>
 
 <template>
-  <el-dropdown trigger="contextmenu" @command="handleMenuCommand">
-    <el-tooltip placement="top" :show-after="200">
-      <template #content>
-        <div class="path-tooltip">
-          <template v-if="hasPath">
-            <div>{{ fullPath }}</div>
-            <div>{{ statusText }}</div>
-          </template>
-          <div v-else>本地路径未创建</div>
-          <div>右键打开快捷菜单</div>
-        </div>
-      </template>
+  <el-tooltip placement="top" :show-after="200">
+    <template #content>
+      <div class="path-tooltip">
+        <template v-if="hasPath">
+          <div>{{ fullPath }}</div>
+          <div>{{ statusText }}</div>
+        </template>
+        <div v-else>本地路径未创建</div>
+        <div>右键打开快捷菜单</div>
+      </div>
+    </template>
+    <el-dropdown trigger="contextmenu" @command="handleMenuCommand">
       <button
         type="button"
         class="path-cell-btn"
@@ -182,22 +167,16 @@ async function handleMenuCommand(command: string) {
           <component :is="iconComponent" />
         </el-icon>
       </button>
-    </el-tooltip>
-    <template #dropdown>
-      <el-dropdown-menu>
-        <el-dropdown-item v-if="canCreatePath" command="create" :disabled="creating">
-          创建路径
-        </el-dropdown-item>
-        <el-dropdown-item v-if="hasPath" command="copy">复制路径</el-dropdown-item>
-        <el-dropdown-item
-          v-if="hasPath && existsOnDisk"
-          command="open"
-        >
-          打开文件夹
-        </el-dropdown-item>
-      </el-dropdown-menu>
-    </template>
-  </el-dropdown>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item v-if="hasPath" command="copy">复制路径</el-dropdown-item>
+          <el-dropdown-item v-if="canCreatePath" command="create" :disabled="creating">
+            创建路径
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+  </el-tooltip>
 </template>
 
 <style scoped>

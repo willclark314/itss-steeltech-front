@@ -354,7 +354,8 @@ onUnmounted(() => {
         <p class="section-desc">
           创建项目本地路径时按规则拼接相对路径。可用变量：
           <code>{year}</code>、<code>{year2}</code>、<code>{projectNo}</code>、
-          <code>{projectName}</code>、<code>{projectFolder}</code>、<code>{date}</code>
+          <code>{projectNoDigits}</code>、<code>{projectName}</code>、
+          <code>{projectFolder}</code>、<code>{date}</code>
         </p>
 
         <el-form-item label="设计组规则">
@@ -362,7 +363,7 @@ onUnmounted(() => {
             v-model="form.localWorkPath.pathPatterns.design"
             type="textarea"
             :rows="2"
-            placeholder="如 e\1【项目归档】设计组\【{year}】设计组归档\{projectNo}#{projectName}"
+            placeholder="如 e\itss\{year}\{projectNoDigits}#{projectName}"
           />
           <div class="pattern-preview-block">
             <span class="pattern-preview-label">相对路径示例</span>
@@ -377,7 +378,7 @@ onUnmounted(() => {
             v-model="form.localWorkPath.pathPatterns.detail"
             type="textarea"
             :rows="2"
-            placeholder="如 f\1【项目归档】深化组\【{year}】深化组归档\{projectNo}#{projectName}"
+            placeholder="如 f\itss\{year}\{projectNoDigits}#{projectName}"
           />
           <div class="pattern-preview-block">
             <span class="pattern-preview-label">相对路径示例</span>

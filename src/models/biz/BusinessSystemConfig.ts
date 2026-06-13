@@ -9,7 +9,7 @@ export interface LocalWorkPathConfig {
   /** 可选 IP 列表（含预设、本机 IP 与自定义输入） */
   ips: string[]
   drive: string
-  /** 项目本地路径组合规则，支持 {year} {year2} {projectNo} {projectName} {projectFolder} {date} */
+  /** 项目本地路径组合规则，支持 {year} {year2} {projectNo} {projectNoDigits} {projectName} {projectFolder} {date} */
   pathPatterns: WorkPathPatternConfig
 }
 
@@ -17,8 +17,8 @@ export class BusinessSystemConfig {
   static readonly DEFAULT_SERVER_IP = '10.10.1.175'
 
   static readonly DEFAULT_PATH_PATTERNS: WorkPathPatternConfig = {
-    design: 'e\\1【项目归档】设计组\\【{year}】设计组归档\\{projectNo}#{projectName}',
-    detail: 'f\\1【项目归档】深化组\\【{year}】深化组归档\\{projectNo}#{projectName}',
+    design: 'e\\itss\\{year}\\{projectNoDigits}#{projectName}',
+    detail: 'f\\itss\\{year}\\{projectNoDigits}#{projectName}',
   }
 
   static readonly LOCAL_WORK_PATH: LocalWorkPathConfig = {

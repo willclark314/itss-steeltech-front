@@ -81,9 +81,3 @@ export function generateWorkPath(payload: GenerateWorkPathPayload) {
   })
 }
 
-export function openWorkPath(path: string) {
-  return request<{ ok: boolean; path: string }>('/system/open-path', {
-    method: 'POST',
-    body: JSON.stringify({ path }),
-  })
-}

@@ -5,23 +5,37 @@ export interface ProjectPathVariables {
   year: string
   year2: string
   projectNo: string
+  /** 项目号中的阿拉伯数字部分，如 AB25059 → 25059 */
+  projectNoDigits: string
   projectName: string
   projectFolder: string
   date: string
 }
 
 export class ProjectWorkPath {
+  static extractProjectNoDigits(projectNo: string): string {
+    const trimmed = projectNo.trim()
+    const withoutPrefix = trimmed.replace(/^[A-Za-z]+/, '')
+    if (withoutPrefix && /^\d+$/.test(withoutPrefix)) {
+      return withoutPrefix
+    }
+    const digits = trimmed.replace(/\D/g, '')
+    return digits || trimmed
+  }
+
   static buildVariables(project: Pick<ProjectRecord, 'projectNo' | 'name' | 'receivedDate' | 'plannedStartDate'>): ProjectPathVariables {
     const year = ProjectWorkPath.extractProjectYear(project)
     const year2 = year.slice(-2)
     const projectNo = project.projectNo.trim()
+    const projectNoDigits = ProjectWorkPath.extractProjectNoDigits(projectNo)
     const projectName = project.name.trim()
-    const projectFolder = projectName ? `${projectNo}#${projectName}` : projectNo
+    const projectFolder = projectName ? `${projectNoDigits}#${projectName}` : projectNoDigits
 
     return {
       year,
       year2,
       projectNo,
+      projectNoDigits,
       projectName,
       projectFolder,
       date: new Date().toISOString().slice(0, 10),
@@ -77,8 +91,9 @@ export class ProjectWorkPath {
       year: '2026',
       year2: '26',
       projectNo: 'AB25059',
+      projectNoDigits: '25059',
       projectName: '示例项目名称',
-      projectFolder: 'AB25059#示例项目名称',
+      projectFolder: '25059#示例项目名称',
       date: new Date().toISOString().slice(0, 10),
     })
   }
