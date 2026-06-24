@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import UserMenu from '@/components/UserMenu.vue'
 import LayoutTabs from '@/components/LayoutTabs.vue'
+import { getUser } from '@/utils/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -23,15 +24,23 @@ interface MenuItem {
 
 const isDev = import.meta.env.DEV
 
+// ── 当前用户权限 ──
+const currentUser = getUser()
+const isAdminUser =
+  currentUser?.loginType === 'dev' || currentUser?.username === 'admin'
+
 const systems = computed(() => {
   const list: { id: SystemId; name: string }[] = [
     { id: 'production', name: '门户' },
-    { id: 'business', name: '业务系统' },
     { id: 'personnel', name: '人员系统' },
-    { id: 'system', name: '系统设置' },
   ]
-  if (isDev) {
-    list.push({ id: 'development', name: '开发' })
+  // 仅管理员可见：业务系统、系统设置、开发
+  if (isAdminUser) {
+    list.splice(1, 0, { id: 'business', name: '业务系统' })
+    list.push({ id: 'system', name: '系统设置' })
+    if (isDev) {
+      list.push({ id: 'development', name: '开发' })
+    }
   }
   return list
 })
@@ -57,11 +66,17 @@ const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
     { path: '/business/project', title: '项目', icon: 'Briefcase' },
     { path: '/business/schedule', title: '工作安排', icon: 'Calendar' },
   ],
-  personnel: [
-    { path: '/personnel/person', title: '人员', icon: 'Avatar' },
-    { path: '/personnel/role', title: '角色', icon: 'Key' },
-    { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
-  ],
+  personnel: isAdminUser
+    ? [
+        { path: '/personnel/person', title: '人员', icon: 'Avatar' },
+        { path: '/personnel/role', title: '角色', icon: 'Key' },
+        { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
+        { path: '/personnel/monthly-rest', title: '月休计划', icon: 'Document' },
+      ]
+    : [
+        { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
+        { path: '/personnel/monthly-rest', title: '月休计划', icon: 'Document' },
+      ],
   system: [
     { path: '/system/settings', title: '全局配置', icon: 'Setting' },
   ],

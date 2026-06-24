@@ -18,8 +18,8 @@ const { isDark, toggle: toggleTheme } = useTheme()
 const isDev = import.meta.env.DEV
 
 const form = reactive({
-  username: isDev ? 'admin' : '',
-  password: '123456',
+  username: '',
+  password: '',
 })
 
 const rules = {
@@ -79,15 +79,12 @@ async function handleLogin() {
         size="large"
         @keyup.enter="handleLogin"
       >
-        <p class="login-tip">使用工号和默认密码 123456 登录</p>
-        <p v-if="isDev" class="login-tip login-tip--dev">
-          开发账号：admin / user，默认密码 123456
-        </p>
+        <p class="login-tip">使用工号登录，默认密码 123456</p>
 
         <el-form-item prop="username">
           <el-input
             v-model="form.username"
-            :placeholder="isDev ? '工号 / admin / user' : '工号'"
+            :placeholder="'工号'"
             :prefix-icon="User"
           />
         </el-form-item>
@@ -193,5 +190,25 @@ async function handleLogin() {
 
 .login-btn {
   width: 100%;
+}
+
+/* 去除浏览器自动填充的泥巴色背景 */
+.login-page :deep(.el-input__wrapper) {
+  background-color: var(--el-fill-color-blank);
+  box-shadow: none;
+}
+
+.login-page :deep(.el-input__inner) {
+  background-color: transparent !important;
+}
+
+.login-page :deep(.el-input__inner:-webkit-autofill),
+.login-page :deep(.el-input__inner:-webkit-autofill:hover),
+.login-page :deep(.el-input__inner:-webkit-autofill:focus),
+.login-page :deep(.el-input__inner:-webkit-autofill:active) {
+  -webkit-box-shadow: 0 0 0 30px var(--el-fill-color-blank) inset !important;
+  -webkit-text-fill-color: var(--el-text-color-regular) !important;
+  caret-color: var(--el-text-color-regular);
+  transition: background-color 5000s ease-in-out 0s;
 }
 </style>

@@ -21,7 +21,7 @@ const statusMap = RoleForm.STATUS_MAP
 
 const tableData = ref<RoleRecord[]>([])
 const filteredData = ref<RoleRecord[]>([])
-const permissionOptions = ref<PermissionRecord[]>(RoleForm.PERMISSION_CATALOG)
+const permissionOptions = ref<PermissionRecord[]>([])
 const personnelOptions = ref<PersonnelRecord[]>([])
 
 async function loadRoles() {
@@ -40,13 +40,13 @@ async function loadPermissionOptions() {
   try {
     permissionOptions.value = await fetchPermissionList()
   } catch {
-    permissionOptions.value = RoleForm.PERMISSION_CATALOG
+    permissionOptions.value = []
   }
 }
 
 async function loadPersonnelOptions() {
   try {
-    personnelOptions.value = await fetchPersonnelList()
+    personnelOptions.value = await fetchPersonnelList({ status: 'active' })
   } catch {
     personnelOptions.value = []
   }

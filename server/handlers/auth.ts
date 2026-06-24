@@ -11,7 +11,7 @@ export const DEFAULT_LOGIN_PASSWORD = '123456'
 const DEV_USERNAMES = new Set(['admin', 'user'])
 
 const DEV_USERS = [
-  { username: 'admin', name: '陈魏' },
+  { username: 'admin', name: '管理员' },
   { username: 'user', name: '杜剑龙' },
 ] as const
 

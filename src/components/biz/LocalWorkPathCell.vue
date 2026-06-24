@@ -8,6 +8,7 @@ import {
   fetchSystemConfig,
   generateWorkPath,
 } from '@/api/system'
+import { BusinessSystemConfig, type LocalWorkPathConfig } from '@/models/biz'
 import { ProjectForm } from '@/models/biz/project'
 import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
 import type { ProjectRecord } from '@/models/biz/project'
@@ -23,13 +24,51 @@ const emit = defineEmits<{
 const existsOnDisk = ref<boolean | null>(null)
 const checking = ref(false)
 const creating = ref(false)
+const workPathConfig = ref<LocalWorkPathConfig | null>(null)
 
 const localWorkPath = computed(() => props.project.localWorkPath)
 const hasPath = computed(() => ProjectForm.hasLocalWorkPath(localWorkPath.value))
-const fullPath = computed(() => ProjectForm.buildLocalWorkPathFull(localWorkPath.value))
+
+const resolvedWorkPathConfig = computed(
+  () => workPathConfig.value ?? BusinessSystemConfig.LOCAL_WORK_PATH,
+)
+
+const previewRelativePath = computed(() => {
+  if (hasPath.value) return ''
+  const nature = ProjectWorkPath.resolveNatureTemplate(props.project.natures)
+  if (!nature) return ''
+  return (
+    ProjectWorkPath.buildRelativePath(
+      props.project,
+      resolvedWorkPathConfig.value.pathPatterns,
+      nature,
+    ) ?? ''
+  )
+})
+
+const displayRelativePath = computed(() =>
+  hasPath.value
+    ? ProjectForm.normalizeLocalWorkPath(localWorkPath.value)
+    : previewRelativePath.value,
+)
+
+const displayFullPath = computed(() => {
+  if (!displayRelativePath.value) return ''
+  return ProjectForm.buildLocalWorkPathFull(
+    displayRelativePath.value,
+    resolvedWorkPathConfig.value,
+  )
+})
 
 const statusText = computed(() => {
-  if (!hasPath.value) return '本地路径未创建'
+  if (!hasPath.value) {
+    if (!displayFullPath.value) {
+      return ProjectWorkPath.resolveNatureTemplate(props.project.natures)
+        ? '本地路径未创建'
+        : '本地路径未创建（请先设置项目性质）'
+    }
+    return '本地路径未创建'
+  }
   if (checking.value || existsOnDisk.value === null) return '正在检查本地路径...'
   return existsOnDisk.value ? '本地路径已存在' : '本地路径不存在'
 })
@@ -54,12 +93,22 @@ const iconClass = computed(() => ({
   'is-checking': checking.value || creating.value,
 }))
 
+async function ensureWorkPathConfig() {
+  if (workPathConfig.value) return
+  try {
+    const config = await fetchSystemConfig()
+    workPathConfig.value = config.localWorkPath
+  } catch {
+    // 使用默认配置作为预览回退
+  }
+}
+
 async function verifyPathExists() {
   if (!hasPath.value || checking.value) return
 
   checking.value = true
   try {
-    const result = await checkPathExists(fullPath.value)
+    const result = await checkPathExists(displayFullPath.value)
     existsOnDisk.value = result.exists
   } catch {
     existsOnDisk.value = null
@@ -69,15 +118,17 @@ async function verifyPathExists() {
 }
 
 function handleMouseEnter() {
-  if (!hasPath.value) return
-  void verifyPathExists()
+  void ensureWorkPathConfig()
+  if (hasPath.value) {
+    void verifyPathExists()
+  }
 }
 
 async function copyPath() {
-  if (!hasPath.value) return
+  if (!displayFullPath.value) return
 
   try {
-    await navigator.clipboard.writeText(fullPath.value)
+    await navigator.clipboard.writeText(displayFullPath.value)
     ElMessage.success('路径已复制，可粘贴到资源管理器地址栏')
   } catch {
     ElMessage.error('复制路径失败')
@@ -144,14 +195,11 @@ async function handleMenuCommand(command: string) {
 </script>
 
 <template>
-  <el-tooltip placement="top" :show-after="200">
+  <el-tooltip placement="left" :show-after="200">
     <template #content>
       <div class="path-tooltip">
-        <template v-if="hasPath">
-          <div>{{ fullPath }}</div>
-          <div>{{ statusText }}</div>
-        </template>
-        <div v-else>本地路径未创建</div>
+        <div v-if="displayFullPath">{{ displayFullPath }}</div>
+        <div>{{ statusText }}</div>
         <div>右键打开快捷菜单</div>
       </div>
     </template>
@@ -169,7 +217,7 @@ async function handleMenuCommand(command: string) {
       </button>
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item v-if="hasPath" command="copy">复制路径</el-dropdown-item>
+          <el-dropdown-item v-if="displayFullPath" command="copy">复制路径</el-dropdown-item>
           <el-dropdown-item v-if="canCreatePath" command="create" :disabled="creating">
             创建路径
           </el-dropdown-item>

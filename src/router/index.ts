@@ -1,10 +1,12 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
-import { getToken } from '@/utils/auth'
+import { getToken, getUser } from '@/utils/auth'
 
 declare module 'vue-router' {
   interface RouteMeta {
     title?: string
     public?: boolean
+    /** 仅管理员可访问 */
+    adminOnly?: boolean
   }
 }
 
@@ -27,25 +29,25 @@ const mainChildren: RouteRecordRaw[] = [
     path: 'business/contact',
     name: 'ContactForm',
     component: () => import('@/views/biz/ContactFormView.vue'),
-    meta: { title: '联系单' },
+    meta: { title: '联系单', adminOnly: true },
   },
   {
     path: 'business/project',
     name: 'Project',
     component: () => import('@/views/biz/ProjectView.vue'),
-    meta: { title: '项目' },
+    meta: { title: '项目', adminOnly: true },
   },
   {
     path: 'business/schedule',
     name: 'ProjectSchedule',
     component: () => import('@/views/biz/ScheduleView.vue'),
-    meta: { title: '工作安排' },
+    meta: { title: '工作安排', adminOnly: true },
   },
   {
     path: 'personnel/person',
     name: 'Personnel',
     component: () => import('@/views/personnel/PersonnelView.vue'),
-    meta: { title: '人员' },
+    meta: { title: '人员', adminOnly: true },
   },
   {
     path: 'personnel/leave',
@@ -54,16 +56,22 @@ const mainChildren: RouteRecordRaw[] = [
     meta: { title: '休假' },
   },
   {
+    path: 'personnel/monthly-rest',
+    name: 'PersonnelMonthlyRest',
+    component: () => import('@/views/personnel/MonthlyRestView.vue'),
+    meta: { title: '月休计划' },
+  },
+  {
     path: 'personnel/role',
     name: 'PersonnelRole',
     component: () => import('@/views/personnel/RoleView.vue'),
-    meta: { title: '角色' },
+    meta: { title: '角色', adminOnly: true },
   },
   {
     path: 'system/settings',
     name: 'SystemSettings',
     component: () => import('@/views/system/SystemSettingsView.vue'),
-    meta: { title: '全局配置' },
+    meta: { title: '全局配置', adminOnly: true },
   },
 ]
 
@@ -73,25 +81,25 @@ if (isDev) {
       path: 'dev/page1',
       name: 'DevPage1',
       component: () => import('@/views/dev/ExplorerData.vue'),
-      meta: { title: '浏览器储存' },
+      meta: { title: '浏览器储存', adminOnly: true },
     },
     {
       path: 'dev/page3',
       name: 'DevPage3',
       component: () => import('@/views/dev/DevPage3View.vue'),
-      meta: { title: '开发页面3' },
+      meta: { title: '开发页面3', adminOnly: true },
     },
     {
       path: 'dev/login',
       name: 'DevLogin',
       component: () => import('@/views/dev/DevLoginPreview.vue'),
-      meta: { title: '登录页面' },
+      meta: { title: '登录页面', adminOnly: true },
     },
     {
       path: 'dev/error',
       name: 'DevError',
       component: () => import('@/views/dev/DevErrorPreview.vue'),
-      meta: { title: '错误页面' },
+      meta: { title: '错误页面', adminOnly: true },
     },
   )
 }
@@ -142,6 +150,16 @@ router.beforeEach((to) => {
 
   if (!token) {
     return '/login'
+  }
+
+  // 仅管理员可访问的路由
+  if (to.meta.adminOnly) {
+    const user = getUser()
+    const isAdmin =
+      user?.loginType === 'dev' || user?.username === 'admin'
+    if (!isAdmin) {
+      return '/home'
+    }
   }
 
   return true

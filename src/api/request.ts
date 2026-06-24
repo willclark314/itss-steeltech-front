@@ -15,6 +15,19 @@ export async function request<T = unknown>(
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      // token 失效/鉴权失败：清理登录态并引导重新登录
+      try {
+        const { removeToken } = await import('@/utils/auth')
+        removeToken()
+      } catch {
+        // ignore
+      }
+      if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login'
+      }
+    }
+
     let message = `请求失败: ${response.status}`
     try {
       const payload = (await response.json()) as { message?: string }

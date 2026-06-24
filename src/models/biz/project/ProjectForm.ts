@@ -1,7 +1,5 @@
 import type { FormRules } from 'element-plus'
-import { BOARD_PROJECTS } from '../../../data/board'
 import { BusinessSystemConfig } from '../BusinessSystemConfig'
-import { PersonnelForm } from '../../personnel/PersonnelForm'
 
 export type ProjectStatus = 'active' | 'done' | 'paused'
 export type ProjectNatureCode = 'design' | 'detail'
@@ -112,35 +110,6 @@ export class ProjectForm {
   private static readonly UNASSIGNED_GROUP_KEY = '__unassigned__'
   private static readonly UNSET_NATURE_KEY = '__unset__'
 
-  static buildAssignees(personnelIds: string[]): {
-    assignedPersonnelIds: string[]
-    assignedPersonnel: ProjectAssignee[]
-  } {
-    const personnelMap = new Map(
-      PersonnelForm.DEFAULT_SAMPLES.map((person) => [person.id, person]),
-    )
-
-    const assignedPersonnel = personnelIds
-      .map((id) => personnelMap.get(id))
-      .filter((person): person is NonNullable<typeof person> => !!person)
-      .map((person) => ({
-        id: person.id,
-        name: person.name,
-        team: person.team,
-      }))
-
-    return {
-      assignedPersonnelIds: assignedPersonnel.map((person) => person.id),
-      assignedPersonnel,
-    }
-  }
-
-  static buildDefaultSamples(): ProjectRecord[] {
-    return ProjectForm.cloneSamples(BOARD_PROJECTS)
-  }
-
-  static readonly DEFAULT_SAMPLES: ProjectRecord[] = ProjectForm.buildDefaultSamples()
-
   readonly record: ProjectRecord
 
   constructor(record: ProjectRecord) {
@@ -189,7 +158,7 @@ export class ProjectForm {
     }
   }
 
-  static cloneSamples(data: ProjectRecord[] = ProjectForm.DEFAULT_SAMPLES) {
+  static cloneSamples(data: ProjectRecord[]) {
     return data.map((item) => ProjectForm.cloneRecord(item))
   }
 

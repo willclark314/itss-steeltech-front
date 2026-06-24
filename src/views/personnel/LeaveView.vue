@@ -17,7 +17,7 @@ const leaveTypeMap = PersonnelLeaveForm.TYPE_MAP
 const leaveStatusMap = PersonnelLeaveForm.STATUS_MAP
 
 const leaveEntries = PersonnelLeaveForm.cloneEntries()
-const personnelList = ref(PersonnelForm.cloneSamples())
+const personnelList = ref(PersonnelForm.cloneSamples([]))
 const personnelIds = computed(() => personnelList.value.map((item) => item.id))
 
 const groupVisible = reactive<Record<string, boolean>>({

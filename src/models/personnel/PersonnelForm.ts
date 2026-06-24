@@ -1,5 +1,4 @@
 import type { FormRules } from 'element-plus'
-import { BOARD_PERSONNEL } from '../../data/board'
 
 export type PersonnelStatus = 'active' | 'inactive' | 'leave'
 export type PersonnelNationality = '中国' | '印度尼西亚'
@@ -217,7 +216,33 @@ export class PersonnelForm {
     }
   }
 
-  static readonly DEFAULT_SAMPLES: PersonnelRecord[] = BOARD_PERSONNEL
+  static createEmptyForm(): PersonnelFormData {
+    return {
+      id: '',
+      name: '',
+      employeeNo: '',
+      idCardNo: '',
+      passportNo: '',
+      passportExpiry: '',
+      position: '',
+      nationality: PersonnelForm.NATIONALITY.CHINA,
+      workshop: PersonnelForm.WORKSHOP,
+      team: '',
+      birthDate: '',
+      age: 0,
+      gender: '',
+      ethnicity: '',
+      nativePlace: '',
+      education: '',
+      homeAddress: '',
+      graduationSchool: '',
+      major: '',
+      indonesiaPhone: '',
+      domesticPhone: '',
+      dormitoryNo: '',
+      status: 'active',
+    }
+  }
 
   readonly record: PersonnelRecord
 
@@ -241,7 +266,7 @@ export class PersonnelForm {
     Object.assign(this.record, form, { workshop: PersonnelForm.WORKSHOP })
   }
 
-  static cloneSamples(data: PersonnelRecord[] = PersonnelForm.DEFAULT_SAMPLES) {
+  static cloneSamples(data: PersonnelRecord[]) {
     return data.map((item) => PersonnelForm.cloneRecord(item))
   }
 

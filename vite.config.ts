@@ -4,7 +4,8 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import { fileURLToPath, URL } from 'node:url'
-import { sqliteApiPlugin } from './server/vite-plugin'
+import { sqliteApiPlugin, localSystemApiPlugin } from './server/vite-plugin'
+import { isLocalSystemApiRequest } from './server/local-system-routes'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd())
@@ -22,7 +23,7 @@ export default defineConfig(({ mode }) => {
         resolvers: [ElementPlusResolver()],
         dts: 'src/components.d.ts',
       }),
-      ...(useMock ? [sqliteApiPlugin()] : []),
+      ...(useMock ? [sqliteApiPlugin()] : [localSystemApiPlugin()]),
     ],
     resolve: {
       alias: {
@@ -31,7 +32,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5173,
-      open: true,
+      open: false,
       ...(useMock
         ? {}
         : {
@@ -39,6 +40,11 @@ export default defineConfig(({ mode }) => {
               '/api': {
                 target: env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
                 changeOrigin: true,
+                bypass(req) {
+                  if (isLocalSystemApiRequest(req.url, req.method)) {
+                    return false
+                  }
+                },
               },
             },
           }),

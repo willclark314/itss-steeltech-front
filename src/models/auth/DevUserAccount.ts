@@ -4,12 +4,12 @@ import type { PersonnelRecord } from '../personnel/PersonnelForm'
 export type DevAccountKey = 'admin' | 'user'
 
 export const DEV_USER_PROFILES: Record<DevAccountKey, PersonnelRecord> = {
-  admin: PersonnelForm.sample('DEV001', '陈魏', '设计组', {
+  admin: PersonnelForm.sample('DEV001', '管理员', '设计组', {
     employeeNo: '42609901',
     idCardNo: '50010419880001',
     passportNo: 'ER3990001',
     passportExpiry: '2036-03-24',
-    position: '钢结构技术副科长',
+    position: '开发',
     birthDate: '1988-06-12',
     age: 38,
     gender: '男',
@@ -21,6 +21,7 @@ export const DEV_USER_PROFILES: Record<DevAccountKey, PersonnelRecord> = {
     indonesiaPhone: '081934831390',
     domesticPhone: '13452039901',
     dormitoryNo: 'B3_608',
+    status: 'active',
   }),
   user: PersonnelForm.sample('DEV002', '杜剑龙', '设计组', {
     employeeNo: '42609902',

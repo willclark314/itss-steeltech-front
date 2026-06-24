@@ -13,6 +13,7 @@ export interface User {
   employeeNo?: string
   loginType?: LoginType
   profile?: UserPersonnelProfile
+  roles?: string[]
 }
 
 export function getToken(): string | null {

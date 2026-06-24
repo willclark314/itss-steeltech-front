@@ -1,4 +1,3 @@
-import { BOARD_CONTACTS } from '../../../data/board'
 import type { FormRules, UploadRawFile, UploadUserFile } from 'element-plus'
 
 export type ContactStatus = 'pending' | 'processing' | 'done' | 'cancelled'
@@ -136,8 +135,6 @@ export class ContactForm {
     content: [{ required: true, message: '请输入联系内容', trigger: 'blur' }],
   }
 
-  static readonly DEFAULT_SAMPLES: ContactRecord[] = BOARD_CONTACTS
-
   readonly record: ContactRecord
 
   constructor(record: ContactRecord) {
@@ -193,7 +190,7 @@ export class ContactForm {
     }
   }
 
-  static cloneSamples(data: ContactRecord[] = ContactForm.DEFAULT_SAMPLES) {
+  static cloneSamples(data: ContactRecord[]) {
     return data.map((item) => ContactForm.cloneRecord(item))
   }
 

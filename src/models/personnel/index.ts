@@ -1,5 +1,6 @@
 export { PersonnelForm } from './PersonnelForm'
 export { PersonnelLeaveForm } from './PersonnelLeaveForm'
+export { MonthlyRestForm } from './MonthlyRestPlan'
 export { RoleForm } from './RoleForm'
 export type {
   PersonnelDormitoryZone,
@@ -9,6 +10,12 @@ export type {
   PersonnelRecordGroup,
   PersonnelStatus,
 } from './PersonnelForm'
+export type {
+  MonthlyRestRecord,
+  MonthlyRestTableRow,
+  MonthlyRestTeamGroup,
+  WeekendDay,
+} from './MonthlyRestPlan'
 export type {
   CalendarDayCell,
   CalendarMonth,

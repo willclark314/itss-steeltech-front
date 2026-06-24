@@ -11,9 +11,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "db:init": "tsx server/scripts/import-contact-board.ts && tsx server/scripts/init-db.ts",
-    "import:board": "tsx server/scripts/import-contact-board.ts",
-    "sync:board": "tsx server/scripts/import-contact-board.ts && tsx server/scripts/sync-board-data.ts"
+    "db:init": "tsx server/scripts/init-db.ts"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

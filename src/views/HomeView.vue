@@ -1,7 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { getUser } from '@/utils/auth'
 
 const router = useRouter()
+
+// ── 当前用户权限 ──
+const isAdminUser =
+  getUser()?.loginType === 'dev' || getUser()?.username === 'admin'
 
 interface FeatureLink {
   path: string
@@ -15,77 +21,60 @@ interface SystemModule {
   links: FeatureLink[]
 }
 
-const systemModules: SystemModule[] = [
-  {
-    name: '门户',
-    summary: '系统入口与基础信息，便于快速了解平台概况。',
-    links: [
-      {
-        path: '/home',
-        title: '首页',
-        description: '系统概览与功能导航',
-      },
-      {
-        path: '/portal/about',
-        title: '关于',
-        description: '了解系统概况与使用说明',
-      },
-    ],
-  },
-  {
-    name: '业务系统',
-    summary: '支撑日常业务协同，管理项目与工程联系单。',
-    links: [
-      {
-        path: '/business/contact',
-        title: '联系单',
-        description: '联系单录入、查询、附件管理与状态跟踪',
-      },
-      {
-        path: '/business/project',
-        title: '项目',
-        description: '项目信息维护、检索及与联系单关联查看',
-      },
-      {
-        path: '/business/schedule',
-        title: '工作安排',
-        description: '按年度计划开始与结束时间查看项目日历安排',
-      },
-    ],
-  },
-  {
+const systemModules = computed<SystemModule[]>(() => {
+  const modules: SystemModule[] = [
+    {
+      name: '门户',
+      summary: '系统入口与基础信息，便于快速了解平台概况。',
+      links: [
+        { path: '/home', title: '首页', description: '系统概览与功能导航' },
+        { path: '/portal/about', title: '关于', description: '了解系统概况与使用说明' },
+      ],
+    },
+  ]
+
+  // 仅管理员可见：业务系统
+  if (isAdminUser) {
+    modules.push({
+      name: '业务系统',
+      summary: '支撑日常业务协同，管理项目与工程联系单。',
+      links: [
+        { path: '/business/contact', title: '联系单', description: '联系单录入、查询、附件管理与状态跟踪' },
+        { path: '/business/project', title: '项目', description: '项目信息维护、检索及与联系单关联查看' },
+        { path: '/business/schedule', title: '工作安排', description: '按年度计划开始与结束时间查看项目日历安排' },
+      ],
+    })
+  }
+
+  modules.push({
     name: '人员系统',
     summary: '钢结构技术科人员信息与休假安排管理。',
-    links: [
-      {
-        path: '/personnel/person',
-        title: '人员',
-        description: '人员档案查询、详情编辑及按班组/国籍/宿舍分组',
-      },
-      {
-        path: '/personnel/role',
-        title: '角色',
-        description: '角色管理、关联人员与页面访问权限配置',
-      },
-      {
-        path: '/personnel/leave',
-        title: '休假',
-        description: '全年休假日历、班组筛选与休假记录查看',
-      },
-    ],
-  },
-  {
-    name: '系统设置',
-    summary: '系统级参数与全局配置，对所有用户生效。',
-    links: [
-      {
-        path: '/system/settings',
-        title: '全局配置',
-        description: '本地工作路径、IP 与盘符等系统级参数维护',
-      },
-    ],
-  },
-]
+    links: isAdminUser
+      ? [
+          { path: '/personnel/person', title: '人员', description: '人员档案查询、详情编辑及按班组/国籍/宿舍分组' },
+          { path: '/personnel/role', title: '角色', description: '角色管理、关联人员与页面访问权限配置' },
+          { path: '/personnel/leave', title: '休假', description: '全年休假日历、班组筛选与休假记录查看' },
+          { path: '/personnel/monthly-rest', title: '月休计划', description: '每月周末休息排班，点击方格切换休息日' },
+        ]
+      : [
+          { path: '/personnel/leave', title: '休假', description: '全年休假日历、班组筛选与休假记录查看' },
+          { path: '/personnel/monthly-rest', title: '月休计划', description: '每月周末休息排班，点击方格切换休息日' },
+        ],
+  })
+
+  // 仅管理员可见：系统设置
+  if (isAdminUser) {
+    modules.push({
+      name: '系统设置',
+      summary: '系统级参数与全局配置，对所有用户生效。',
+      links: [
+        { path: '/system/settings', title: '全局配置', description: '本地工作路径、IP 与盘符等系统级参数维护' },
+      ],
+    })
+  }
+
+  return modules
+})
 
 function goTo(path: string) {
   void router.push(path)

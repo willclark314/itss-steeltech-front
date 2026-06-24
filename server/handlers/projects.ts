@@ -487,7 +487,9 @@ export async function handleProjectUpdate(ctx: ApiContext, res: ServerResponse) 
   }
 
   const payload = ctx.body as ProjectWritePayload
-  const name = payload.name?.trim()
+  const name = (
+    payload.name !== undefined ? payload.name : existing.name ?? ''
+  ).trim()
   if (!name) {
     sendError(res, 400, '项目名称不能为空')
     return true

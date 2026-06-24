@@ -20,7 +20,7 @@ const emit = defineEmits<{
 const saving = ref(false)
 const isEditing = ref(false)
 const formRef = ref<FormInstance>()
-const editForm = reactive(PersonnelForm.createFormFromRecord(PersonnelForm.DEFAULT_SAMPLES[0]!))
+const editForm = reactive(PersonnelForm.createEmptyForm())
 
 const statusEditOptions = PersonnelForm.STATUS_OPTIONS.filter((item) => item.value)
 const teamOptions = PersonnelForm.TEAM_OPTIONS

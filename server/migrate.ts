@@ -1,6 +1,4 @@
 import type Database from 'better-sqlite3'
-import { RoleForm } from '../src/models/personnel/RoleForm.ts'
-import { removeObsoleteRoles, replaceBoardData, shouldReplaceBoardBizData } from './seed-board'
 
 function getColumnNames(db: Database.Database, table: string) {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
@@ -262,123 +260,6 @@ function migrateRoleTables(db: Database.Database) {
     `CREATE INDEX IF NOT EXISTS idx_role_personnel_personnel_id ON role_personnel (personnel_id)`,
   )
 
-  const permissionCount = (
-    db.prepare('SELECT COUNT(*) AS count FROM permissions').get() as { count: number }
-  ).count
-
-  if (permissionCount === 0) {
-    seedPermissions(db)
-  }
-
-  seedDefaultRolesIfEmpty(db)
-}
-
-function seedPermissions(db: Database.Database) {
-  const insertPermission = db.prepare(
-    `INSERT OR IGNORE INTO permissions (
-      id, code, name, module, path, page_key, page_name, action
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-
-  for (const permission of RoleForm.PERMISSION_CATALOG) {
-    insertPermission.run(
-      permission.id,
-      permission.code,
-      permission.name,
-      permission.module,
-      permission.path,
-      permission.pageKey,
-      permission.pageName,
-      permission.action,
-    )
-  }
-}
-
-function seedRoleSamples(db: Database.Database) {
-  const insertRole = db.prepare(
-    'INSERT OR IGNORE INTO roles (id, name, code, description, status) VALUES (?, ?, ?, ?, ?)',
-  )
-  const insertRolePermission = db.prepare(
-    'INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
-  )
-  const insertRolePersonnel = db.prepare(
-    'INSERT OR IGNORE INTO role_personnel (role_id, personnel_id) VALUES (?, ?)',
-  )
-
-  for (const role of RoleForm.ROLE_SEEDS) {
-    insertRole.run(role.id, role.name, role.code, role.description, role.status)
-    for (const permissionId of role.permissionIds) {
-      insertRolePermission.run(role.id, permissionId)
-    }
-    for (const personnelId of role.personnelIds) {
-      insertRolePersonnel.run(role.id, personnelId)
-    }
-  }
-}
-
-function seedDefaultRolesIfEmpty(db: Database.Database) {
-  const roleCount = (db.prepare('SELECT COUNT(*) AS count FROM roles').get() as { count: number })
-    .count
-
-  if (roleCount > 0) return
-
-  seedRoleSamples(db)
-}
-
-function syncPermissionCatalog(db: Database.Database) {
-  seedPermissions(db)
-
-  const adminRole = db
-    .prepare("SELECT id FROM roles WHERE code = 'admin' LIMIT 1")
-    .get() as { id: string } | undefined
-  if (!adminRole) return
-
-  const insertRolePermission = db.prepare(
-    'INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)',
-  )
-  for (const permission of RoleForm.PERMISSION_CATALOG) {
-    if (permission.pageKey === 'system-settings') {
-      insertRolePermission.run(adminRole.id, permission.id)
-    }
-  }
-}
-
-function migrateActionBasedPermissions(db: Database.Database) {
-  if (!tableExists(db, 'permissions')) return
-
-  const expectedCount = RoleForm.PERMISSION_CATALOG.length
-  const hasActionModel = db
-    .prepare(
-      "SELECT 1 AS ok FROM permissions WHERE code = 'contact:create' AND page_key = 'contact' AND action = 'create' LIMIT 1",
-    )
-    .get() as { ok: number } | undefined
-  const permissionCount = (
-    db.prepare('SELECT COUNT(*) AS count FROM permissions').get() as { count: number }
-  ).count
-
-  if (hasActionModel && permissionCount === expectedCount) return
-
-  if (hasActionModel && permissionCount < expectedCount) {
-    syncPermissionCatalog(db)
-    return
-  }
-
-  db.exec('DELETE FROM role_personnel')
-  db.exec('DELETE FROM role_permissions')
-  db.exec('DELETE FROM roles')
-  db.exec('DELETE FROM permissions')
-  seedPermissions(db)
-  seedRoleSamples(db)
-}
-
-function migrateBoardBizData(db: Database.Database) {
-  if (!shouldReplaceBoardBizData(db)) return
-  replaceBoardData(db)
-}
-
-function migrateObsoleteRoles(db: Database.Database) {
-  if (!tableExists(db, 'roles')) return
-  removeObsoleteRoles(db)
 }
 
 function migrateAccountPasswordsTable(db: Database.Database) {
@@ -476,8 +357,5 @@ export function runMigrations(db: Database.Database) {
   migrateRoleTables(db)
   migrateAccountPasswordsTable(db)
   migrateSystemSettingsTable(db)
-  migrateActionBasedPermissions(db)
-  migrateObsoleteRoles(db)
-  migrateBoardBizData(db)
   migrateContactFormRelations(db)
 }
