@@ -160,7 +160,7 @@ async function handleReset() {
 }
 
 function handlePathUpdated(projectNo: string, localWorkPath: string) {
-  patchItem(projectNo, { localWorkPath })
+  patchItem(projectNo, (item) => ({ ...item, localWorkPath }))
   if (isGrouped.value) {
     const grouped = groupData.value.find((item) => item.projectNo === projectNo)
     if (grouped) grouped.localWorkPath = localWorkPath

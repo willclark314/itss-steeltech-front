@@ -6,6 +6,21 @@ export interface MonthlyRestQuery {
   month?: number
 }
 
+export interface MonthlyRestStatus {
+  year: number
+  month: number
+  locked: boolean
+  lockedBy: string | null
+  lockedAt: string | null
+}
+
+export interface MonthlyRestScope {
+  personnelId: string
+  role: 'admin' | 'leader' | 'member'
+  editablePersonnelIds: string[]
+  team: string
+}
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 /** 获取指定年月的所有月休记录 */
@@ -31,6 +46,24 @@ export function batchSaveMonthlyRest(records: MonthlyRestRecord[]) {
     method: 'POST',
     body: JSON.stringify(records),
   })
+}
+
+/** 管理员保存并定稿（锁定当月，员工不可再修改） */
+export function finalizeMonthlyRest(records: MonthlyRestRecord[]) {
+  return request<{ saved: MonthlyRestRecord[]; lock: MonthlyRestStatus }>('/monthly-rest/finalize', {
+    method: 'POST',
+    body: JSON.stringify(records),
+  })
+}
+
+/** 获取某月是否已定稿锁定 */
+export function fetchMonthlyRestStatus(year: number, month: number) {
+  return request<MonthlyRestStatus>(`/monthly-rest/status?year=${year}&month=${month}`)
+}
+
+/** 获取当前用户在月休计划中的可编辑范围 */
+export function fetchMonthlyRestScope() {
+  return request<MonthlyRestScope>('/monthly-rest/my-scope')
 }
 
 /** 删除某条月休记录 */

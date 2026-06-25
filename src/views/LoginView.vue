@@ -15,8 +15,6 @@ const formRef = ref()
 const loading = ref(false)
 const { isDark, toggle: toggleTheme } = useTheme()
 
-const isDev = import.meta.env.DEV
-
 const form = reactive({
   username: '',
   password: '',

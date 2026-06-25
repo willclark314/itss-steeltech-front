@@ -26,6 +26,14 @@ const ipSelectWrapRef = ref<HTMLElement>()
 const maxVisibleIpTags = ref(99)
 let ipTagsResizeObserver: ResizeObserver | null = null
 
+type DriveRowLike = {
+  name?: string
+  label?: string
+  type?: HostDriveInfo['type'] | string
+  totalBytes?: number
+  freeBytes?: number
+}
+
 const designPatternPreview = computed(() =>
   SystemConfigForm.buildPatternPreview(form.localWorkPath, 'design'),
 )
@@ -170,32 +178,35 @@ function formatBytes(value?: number) {
   return `${size.toFixed(digits)} ${units[unitIndex]}`
 }
 
-function formatDriveSpace(row: HostDriveInfo) {
+function formatDriveSpace(row: DriveRowLike) {
   if (row.freeBytes == null || row.totalBytes == null) return '-'
   return `${formatBytes(row.freeBytes)} 可用 / ${formatBytes(row.totalBytes)}`
 }
 
-function driveFreePercent(row: HostDriveInfo) {
+function driveFreePercent(row: DriveRowLike) {
   if (row.freeBytes == null || !row.totalBytes) return 0
   return Math.min(100, Math.round((row.freeBytes / row.totalBytes) * 100))
 }
 
-function canSelectDrive(row: HostDriveInfo) {
-  return /^[A-Za-z]$/.test(row.name)
+function canSelectDrive(row: DriveRowLike) {
+  return typeof row.name === 'string' && /^[A-Za-z]$/.test(row.name)
 }
 
-function isCurrentDrive(row: HostDriveInfo) {
-  return form.localWorkPath.drive.toUpperCase() === row.name.toUpperCase()
+function isCurrentDrive(row: DriveRowLike) {
+  return typeof row.name === 'string'
+    && form.localWorkPath.drive.toUpperCase() === row.name.toUpperCase()
 }
 
-function handleSelectDrive(row: HostDriveInfo) {
+function handleSelectDrive(row: DriveRowLike) {
   if (!canSelectDrive(row) || isCurrentDrive(row)) return
-  form.localWorkPath.drive = row.name.toUpperCase()
+  const driveName = row.name
+  if (typeof driveName !== 'string') return
+  form.localWorkPath.drive = driveName.toUpperCase()
   drivesDialogVisible.value = false
-  ElMessage.success(`已选择 ${row.label} 作为默认盘符`)
+  ElMessage.success(`已选择 ${row.label ?? driveName} 作为默认盘符`)
 }
 
-function driveRowClassName({ row }: { row: HostDriveInfo }) {
+function driveRowClassName({ row }: { row: DriveRowLike }) {
   return isCurrentDrive(row) ? 'drive-row-selected' : ''
 }
 

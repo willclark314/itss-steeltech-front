@@ -2,7 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchPersonnelList } from '@/api/personnel'
-import { batchSaveMonthlyRest, downloadMonthlyRestExcel, fetchMonthlyRestList } from '@/api/monthlyRest'
+import {
+  batchSaveMonthlyRest,
+  downloadMonthlyRestExcel,
+  fetchMonthlyRestList,
+  fetchMonthlyRestScope,
+  fetchMonthlyRestStatus,
+  finalizeMonthlyRest,
+} from '@/api/monthlyRest'
 import { PersonnelForm, MonthlyRestForm } from '@/models/personnel'
 import { getUser } from '@/utils/auth'
 import type { PersonnelRecord, MonthlyRestRecord } from '@/models/personnel'
@@ -12,6 +19,9 @@ const currentMonth = ref(MonthlyRestForm.getCurrentMonth())
 const loading = ref(false)
 const saving = ref(false)
 const dirty = ref(false)
+const rowSavingId = ref<string | null>(null)
+const isLocked = ref(false)
+const scopeLoaded = ref(false)
 
 const personnelList = ref<PersonnelRecord[]>([])
 const restRecords = ref<MonthlyRestRecord[]>([])
@@ -26,11 +36,12 @@ const teamOptions = PersonnelForm.TEAM_OPTIONS
 
 // ── 当前用户权限 ──
 const currentUser = getUser()
-const currentPersonnelId = currentUser?.personnelId || ''
 const currentTeam = currentUser?.profile?.team || ''
 const isAdmin =
   currentUser?.loginType === 'dev' ||
+  currentUser?.username === 'admin' ||
   currentUser?.roles?.includes('admin') === true
+const scopeEditablePersonnelIds = ref<string[]>([])
 // 组长角色不启用，所有非管理员均为普通成员，只能编辑自己
 
 /** 团队可见性 —— 管理员默认全部可见，普通成员只看自己组 */
@@ -42,13 +53,61 @@ const teamVisible = reactive<Record<string, boolean>>(
 
 /** 当前用户可编辑的人员 ID 列表 */
 const editablePersonnelIds = computed(() => {
+  if (scopeLoaded.value) return scopeEditablePersonnelIds.value
   if (isAdmin) return activePersonnel.value.map((p) => p.id)
-  return [currentPersonnelId]
+  return []
 })
+
+function normalizeCompareValue(value?: string): string {
+  return String(value ?? '').trim()
+}
+
+function isCurrentUserRow(row: { personnelId?: string; employeeNo?: string; name?: string }): boolean {
+  const personnelIdCandidates = [
+    currentUser?.personnelId,
+    currentUser?.profile?.id,
+  ]
+    .map(normalizeCompareValue)
+    .filter(Boolean)
+
+  if (personnelIdCandidates.includes(normalizeCompareValue(row.personnelId))) {
+    return true
+  }
+
+  const employeeNoCandidates = [
+    currentUser?.employeeNo,
+    currentUser?.profile?.employeeNo,
+    currentUser?.username,
+  ]
+    .map(normalizeCompareValue)
+    .filter(Boolean)
+
+  if (employeeNoCandidates.includes(normalizeCompareValue(row.employeeNo))) {
+    return true
+  }
+
+  const currentName = normalizeCompareValue(currentUser?.name || currentUser?.profile?.name)
+  return Boolean(currentName && currentName === normalizeCompareValue(row.name))
+}
+
+/** 当前用户是否“属于”某人的行，用于决定是否显示按钮 */
+function ownsRow(personnelId: string): boolean {
+  return editablePersonnelIds.value.includes(personnelId)
+}
+
+function ownsRowData(row: { personnelId?: string; employeeNo?: string; name?: string }): boolean {
+  return Boolean(row.personnelId && ownsRow(row.personnelId)) || isCurrentUserRow(row)
+}
+
+function shouldShowRowSaveButton(row: { personnelId?: string; employeeNo?: string; name?: string }): boolean {
+  return ownsRowData(row)
+}
 
 /** 当前用户是否可以编辑某人的行 */
 function canEditRow(personnelId: string): boolean {
-  return editablePersonnelIds.value.includes(personnelId)
+  // 月休计划已定稿后，员工不可再改；管理员仍可继续调整并重新定稿
+  if (isLocked.value && !isAdmin) return false
+  return ownsRow(personnelId)
 }
 
 /** 当前选中月份的所有日期（1号到最后一天） */
@@ -97,6 +156,27 @@ function isRestDay(personnelId: string, dateStr: string): boolean {
 /** 判断某人员在某日期的休息是否已保存到数据库 */
 function isSavedDay(personnelId: string, dateStr: string): boolean {
   return (savedMap[personnelId] ?? []).includes(dateStr)
+}
+
+/**
+ * 休息日格子的显示状态（互斥，与 CSS 一一对应）：
+ * - is-rest：绿色，未落库（含默认周日、本地修改未保存）
+ * - is-saved：蓝色，员工已保存且当月未定稿
+ * - is-finalized：紫色，已落库且当月已定稿
+ */
+function getRestCellStatusClass(personnelId: string, dateStr: string): string {
+  if (!isRestDay(personnelId, dateStr)) return ''
+  if (!isSavedDay(personnelId, dateStr)) return 'is-rest'
+  if (isLocked.value) return 'is-finalized'
+  return 'is-saved'
+}
+
+/** 判断某人员本月休息日是否有未保存的修改 */
+function hasRowChanges(personnelId: string): boolean {
+  const current = [...(restMap[personnelId] ?? [])].sort()
+  const saved = [...(savedMap[personnelId] ?? [])].sort()
+  if (current.length !== saved.length) return true
+  return current.some((d, idx) => d !== saved[idx])
 }
 
 /** 同一周内另一个周末日的日期字符串 */
@@ -160,15 +240,22 @@ function getCurrentMonthSundays(): string[] {
 async function loadData() {
   loading.value = true
   try {
-    const [personnel, records] = await Promise.all([
+    // 先清空脏状态，后续由 initRestMap 根据真实数据重新计算
+    dirty.value = false
+    const [personnel, records, status, scope] = await Promise.all([
       fetchPersonnelList(),
       fetchMonthlyRestList({ year: currentYear.value, month: currentMonth.value }),
+      fetchMonthlyRestStatus(currentYear.value, currentMonth.value),
+      fetchMonthlyRestScope(),
     ])
     personnelList.value = personnel
     restRecords.value = records
+    isLocked.value = status.locked === true
+    scopeEditablePersonnelIds.value = scope.editablePersonnelIds ?? []
+    scopeLoaded.value = true
     initRestMap(records)
-    dirty.value = false
   } catch (error) {
+    scopeLoaded.value = false
     ElMessage.error(error instanceof Error ? error.message : '加载数据失败')
   } finally {
     loading.value = false
@@ -213,6 +300,11 @@ function initRestMap(records: MonthlyRestRecord[]) {
 
 /** 保存 */
 async function handleSave() {
+  if (!tableRows.value.length) {
+    ElMessage.warning('当前没有可保存的人员计划')
+    return
+  }
+
   saving.value = true
   try {
     // 只保存当前用户有权修改的人员记录
@@ -226,14 +318,50 @@ async function handleSave() {
         restDays: [...(restMap[row.personnelId] ?? [])].sort(),
       }))
 
-    await batchSaveMonthlyRest(records)
-    // 保存后立即重新加载，确认后端持久化结果
+    // 管理员保存=定稿锁定：保存后员工不可再修改
+    await finalizeMonthlyRest(records)
     await loadData()
-    ElMessage.success('月休计划保存成功')
+    ElMessage.success('月休计划已保存并定稿')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+/** 保存单个人员的月休计划（表格行“保存”按钮使用） */
+async function handleSaveRow(personnelId: string) {
+  if (!canEditRow(personnelId)) return
+  if (isLocked.value) return
+
+  // 若当前行无变更则不提交
+  if (!hasRowChanges(personnelId)) return
+
+  rowSavingId.value = personnelId
+  try {
+    const record: MonthlyRestRecord = {
+      id: `${personnelId}_${currentYear.value}_${String(currentMonth.value).padStart(2, '0')}`,
+      personnelId,
+      year: currentYear.value,
+      month: currentMonth.value,
+      restDays: [...(restMap[personnelId] ?? [])].sort(),
+    }
+
+    await batchSaveMonthlyRest([record])
+
+    // 本地快照与数据库对齐
+    savedMap[personnelId] = [...record.restDays]
+
+    // 若所有行都无变更，则整体状态设为未脏
+    if (!tableRows.value.some((row) => hasRowChanges(row.personnelId))) {
+      dirty.value = false
+    }
+
+    ElMessage.success('已保存当前人员的月休计划')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存失败')
+  } finally {
+    rowSavingId.value = null
   }
 }
 
@@ -375,9 +503,21 @@ onMounted(() => {
         </el-check-tag>
       </div>
 
-      <div class="table-hint">
-        <el-icon><InfoFilled /></el-icon>
-        点击方格切换休息日，仅<strong>周六、周日</strong>可选
+      <div class="hint-row">
+        <div class="table-hint">
+          <el-icon><InfoFilled /></el-icon>
+          点击方格切换休息日，仅<strong>周六、周日</strong>可选
+        </div>
+        <div v-if="dutyWarningsByTeam.length > 0" class="duty-hints">
+          <div
+            v-for="group in dutyWarningsByTeam"
+            :key="group.team"
+            class="duty-hint"
+          >
+            <el-icon><WarningFilled /></el-icon>
+            <span>{{ group.team }}：{{ group.dates.join('、') }} 没有人值班，请安排至少一人值班</span>
+          </div>
+        </div>
       </div>
 
       <div class="toolbar-right">
@@ -392,26 +532,15 @@ onMounted(() => {
           导出 Excel
         </el-button>
         <el-button
+          v-if="isAdmin"
           type="primary"
           :loading="saving"
-          :disabled="!dirty"
+          :disabled="tableRows.length === 0"
           @click="handleSave"
         >
           保存计划
         </el-button>
       </div>
-    </div>
-
-    <!-- 值班警告 -->
-    <div v-if="dutyWarningsByTeam.length > 0" class="duty-warnings">
-      <el-alert
-        v-for="group in dutyWarningsByTeam"
-        :key="group.team"
-        :title="`${group.team}：${group.dates.join('、')} 没有人值班，请安排至少一人值班`"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
     </div>
 
     <!-- 数据表格 -->
@@ -484,13 +613,14 @@ onMounted(() => {
             <div
               v-if="dayInfo.weekday === '周六' || dayInfo.weekday === '周日'"
               class="rest-cell"
-              :class="{
-                'is-rest': isRestDay(row.personnelId, dayInfo.date),
-                'is-saved': isSavedDay(row.personnelId, dayInfo.date),
-                'is-saturday': dayInfo.weekday === '周六',
-                'is-sunday': dayInfo.weekday === '周日',
-                'is-readonly': !canEditRow(row.personnelId),
-              }"
+              :class="[
+                getRestCellStatusClass(row.personnelId, dayInfo.date),
+                {
+                  'is-saturday': dayInfo.weekday === '周六',
+                  'is-sunday': dayInfo.weekday === '周日',
+                  'is-readonly': !canEditRow(row.personnelId),
+                },
+              ]"
               @click="canEditRow(row.personnelId) && toggleRestDay(row.personnelId, dayInfo.date)"
             >
               <el-icon v-if="isRestDay(row.personnelId, dayInfo.date)" :size="12">
@@ -498,6 +628,27 @@ onMounted(() => {
               </el-icon>
             </div>
             <div v-else class="weekday-cell" />
+          </template>
+        </el-table-column>
+
+        <!-- 操作列：普通用户按行保存 -->
+        <el-table-column
+          fixed="right"
+          label="操作"
+          width="100"
+          align="center"
+        >
+          <template #default="{ row }">
+            <el-button
+              v-if="shouldShowRowSaveButton(row)"
+              type="primary"
+              size="small"
+              :loading="rowSavingId === row.personnelId"
+              :disabled="isLocked || !hasRowChanges(row.personnelId)"
+              @click="handleSaveRow(row.personnelId)"
+            >
+              保存
+            </el-button>
           </template>
         </el-table-column>
 
@@ -528,12 +679,30 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.duty-warnings {
+.hint-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.duty-hints {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
+}
+
+.duty-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+}
+
+.duty-hint .el-icon {
+  font-size: 14px;
   flex-shrink: 0;
-  margin-bottom: 12px;
 }
 
 .month-switcher {
@@ -678,7 +847,7 @@ onMounted(() => {
   color: var(--el-color-success);
 }
 
-/* 已保存到数据库的休息日：蓝色背景 */
+/* 已保存到数据库的休息日：蓝色背景（员工保存后） */
 .rest-cell.is-saved {
   background: var(--el-color-primary-light-7);
   border-color: var(--el-color-primary);
@@ -692,30 +861,59 @@ onMounted(() => {
   color: var(--el-color-primary);
 }
 
-/* 无编辑权限的行：降低不透明度，禁用点击 */
-.rest-cell.is-readonly {
+/* 已定稿（管理员保存计划后）：紫色边框 + 淡紫底 */
+.rest-cell.is-finalized,
+.rest-cell.is-finalized.is-saturday,
+.rest-cell.is-finalized.is-sunday {
+  background: #a59bd2;
+  border-color: #7c3aed;
+}
+
+.rest-cell.is-finalized:hover,
+.rest-cell.is-finalized.is-saturday:hover,
+.rest-cell.is-finalized.is-sunday:hover {
+  background: #ddd6fe;
+}
+
+.rest-cell.is-finalized .el-icon {
+  color: #7c3aed;
+}
+
+/* 无编辑权限的行：降低不透明度，禁用点击（定稿紫色格保持正常亮度） */
+.rest-cell.is-readonly:not(.is-finalized) {
   opacity: 0.5;
   cursor: default;
 }
 
-.rest-cell.is-readonly:hover {
+.rest-cell.is-readonly.is-finalized {
+  cursor: default;
+}
+
+.rest-cell.is-readonly:not(.is-finalized):hover {
   border-color: transparent;
   background: inherit;
 }
 
-.rest-cell.is-readonly.is-saturday:hover {
+.rest-cell.is-readonly:not(.is-finalized).is-saturday:hover {
   background: var(--el-fill-color-lighter);
 }
 
-.rest-cell.is-readonly.is-sunday:hover {
+.rest-cell.is-readonly:not(.is-finalized).is-sunday:hover {
   background: var(--el-fill-color-extra-light);
 }
 
 .rest-cell.is-readonly.is-rest:hover {
-  background: var(--el-color-success-light-7);
+  background: var(--el-color-success-light-6);
 }
 
 .rest-cell.is-readonly.is-saved:hover {
-  background: var(--el-color-primary-light-7);
+  background: var(--el-color-primary-light-6);
+}
+
+.rest-cell.is-readonly.is-finalized:hover,
+.rest-cell.is-readonly.is-finalized.is-saturday:hover,
+.rest-cell.is-readonly.is-finalized.is-sunday:hover {
+  background: #ddd6fe;
+  border-color: #7c3aed;
 }
 </style>
