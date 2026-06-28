@@ -53,8 +53,6 @@ function filterEntriesForScope<T extends { personnelId: string }>(entries: T[]):
 
 /** 普通员工视图：数据校验通过后才为 true，避免挂载日历前闪现他人数据 */
 const memberReady = ref(false)
-/** 普通员工日历快照（仅 actualEntries，一次性赋值，避免 reactive 中间态） */
-const memberCalendarSnapshot = shallowRef<CalendarMonth[] | null>(null)
 const memberDtoLookup = shallowRef(new Map<string, LeaveEntryDTO>())
 
 const emptyMonthPersonnelIds = new Set<string>()
@@ -122,37 +120,100 @@ function applyMemberDtoLookup(entries: LeaveEntryDTO[]) {
   memberDtoLookup.value = lookup
 }
 
-/** 无实际记录时合并一段假设初始休假（推算值，不入库） */
-function resolveMemberDisplayEntries(
+/** 日历勾标：请假（手工申请）对应的入库记录 ID */
+function buildRequestEntryIds(data: LeaveCalendarResponse | null): Set<string> {
+  if (!data) return new Set<string>()
+  const requestIds = new Set<string>()
+  for (const dto of data.actualEntries) {
+    if (dto.type === 'request' || dto.type === 'extended' || dto.type === 'early') {
+      requestIds.add(dto.id)
+    }
+  }
+  return requestIds
+}
+
+/** 最早入库休假开始日：API 锚点 + 本地 actualEntries 兜底 */
+function buildEarliestStartMap(data: LeaveCalendarResponse): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const person of data.personnel) {
+    const anchor = data.earliestLeaveAnchors?.[person.id]
+    if (anchor?.startDate) {
+      map.set(person.id, anchor.startDate)
+    }
+  }
+  for (const dto of data.actualEntries) {
+    if (dto.status === 'cancelled') continue
+    const prev = map.get(dto.personnelId)
+    if (!prev || dto.startDate < prev) {
+      map.set(dto.personnelId, dto.startDate)
+    }
+  }
+  return map
+}
+
+function resolveCalendarPolicies(data: LeaveCalendarResponse): PersonnelLeavePolicy[] {
+  if (!data.personnel.length) return []
+  const policyByPerson = new Map(
+    data.policies.map((policy) => [policy.personnelId, calendarPolicyToFormPolicy(policy)]),
+  )
+  return data.personnel.map((person) => {
+    const existing = policyByPerson.get(person.id)
+    if (existing) return existing
+    return PersonnelLeaveForm.generatePolicies([{ id: person.id }])[0]
+  })
+}
+
+function pickComputedLeavesInYear(
+  computedEntries: LeaveDisplayEntry[],
+  displayYear: number,
+): LeaveDisplayEntry[] {
+  const yearStart = `${displayYear}-01-01`
+  const yearEnd = `${displayYear}-12-31`
+  return computedEntries
+    .filter((entry) => entry.startDate <= yearEnd && entry.endDate >= yearStart)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))
+}
+
+function resolveComputedDisplayEntries(
   data: LeaveCalendarResponse,
   displayYear: number,
 ): LeaveDisplayEntry[] {
   const actualEntries = data.actualEntries.map(dtoToEntry)
-  if (actualEntries.length > 0) return actualEntries
-
-  let computedEntries: LeaveDisplayEntry[] = data.computedEntries.map(dtoToEntry)
-  if (!computedEntries.length && data.personnel.length) {
-    const policies: PersonnelLeavePolicy[] = data.policies.length
-      ? data.policies.map(calendarPolicyToFormPolicy)
-      : PersonnelLeaveForm.generatePolicies(data.personnel.map((person) => ({ id: person.id })))
-    computedEntries = PersonnelLeaveForm.buildAllEntries(policies, displayYear).map(
-      leaveEntryToDisplayEntry,
-    )
-  }
-  if (!computedEntries.length) return actualEntries
+  if (!data.personnel.length) return actualEntries
 
   const today = data.today || new Date().toISOString().slice(0, 10)
-  const yearStart = `${displayYear}-01-01`
-  const yearEnd = `${displayYear}-12-31`
-  const inYear = computedEntries
-    .filter((entry) => entry.startDate <= yearEnd && entry.endDate >= yearStart)
-    .sort((a, b) => a.startDate.localeCompare(b.startDate))
-  const upcoming = inYear.filter((entry) => entry.endDate >= today)
-  const initialLeave = upcoming[0] ?? inYear[0]
-  return initialLeave ? [initialLeave] : actualEntries
+  const todayDate = new Date(`${today}T12:00:00`)
+  const policies = resolveCalendarPolicies(data)
+  const earliestStartMap = buildEarliestStartMap(data)
+
+  const computedInYear = pickComputedLeavesInYear(
+    PersonnelLeaveForm.buildMemberLeaveEntries(
+      policies,
+      displayYear,
+      todayDate,
+      earliestStartMap,
+    ).map(leaveEntryToDisplayEntry),
+    displayYear,
+  )
+
+  const computedToShow = computedInYear.filter(
+    (comp) =>
+      !actualEntries.some(
+        (act) => act.startDate === comp.startDate && act.endDate === comp.endDate,
+      ),
+  )
+
+  return [...actualEntries, ...computedToShow]
 }
 
-/** 普通员工：有实际记录仅展示实际；无记录时展示一段假设初始休假 */
+function resolveMemberDisplayEntries(
+  data: LeaveCalendarResponse,
+  displayYear: number,
+): LeaveDisplayEntry[] {
+  return resolveComputedDisplayEntries(data, displayYear)
+}
+
+/** 普通员工：已保存记录 + 当前查看年份内的全部推算休假 */
 function buildMemberCalendarSnapshot(
   data: LeaveCalendarResponse,
   displayYear: number,
@@ -160,17 +221,19 @@ function buildMemberCalendarSnapshot(
   const records = data.personnel.map(calendarPersonToRecord)
   const entries = resolveMemberDisplayEntries(data, displayYear)
   const rows = PersonnelLeaveForm.buildTableRows(entries, records, { year: displayYear })
-  return PersonnelLeaveForm.buildYearCalendar(displayYear, rows)
+  const today = data.today ? new Date(`${data.today}T12:00:00`) : new Date()
+  return PersonnelLeaveForm.buildYearCalendar(displayYear, rows, today)
 }
 
 function entryToMemberDto(
   entry: LeaveDisplayEntry,
   data: LeaveCalendarResponse,
 ): LeaveEntryDTO {
-  const existing =
-    data.actualEntries.find((dto) => dto.id === entry.id) ??
-    data.computedEntries.find((dto) => dto.id === entry.id)
-  if (existing) return existing
+  const actual = data.actualEntries.find((dto) => dto.id === entry.id)
+  if (actual) return { ...actual, computed: false }
+
+  const computed = data.computedEntries.find((dto) => dto.id === entry.id)
+  if (computed) return { ...computed, computed: true }
 
   return {
     id: entry.id,
@@ -190,15 +253,12 @@ function entryToMemberDto(
 /** 一次性提交员工视图状态，避免 calendarData / memberReady 分步更新导致中间渲染 */
 function commitMemberViewState(data: LeaveCalendarResponse, displayYear: number) {
   console.log('🟦 [commitMemberViewState] 接收 data.personnel:', data.personnel.length, '人, actualEntries:', data.actualEntries.length, '条')
-  const snapshot = buildMemberCalendarSnapshot(data, displayYear)
-  console.log('🟦 [commitMemberViewState] snapshot', snapshot.length, '个月, 第一个月 events 总数:', snapshot[0]?.days.reduce((sum, d) => sum + d.events.length, 0) ?? 0)
   applyMemberPersonnel(data.personnel.map(calendarPersonToRecord))
   const displayEntries = resolveMemberDisplayEntries(data, displayYear)
   applyMemberDtoLookup(displayEntries.map((entry) => entryToMemberDto(entry, data)))
   calendarData.value = data
   loadedCalendarYear.value = displayYear
   useBackend.value = true
-  memberCalendarSnapshot.value = snapshot
   memberReady.value = true
 }
 
@@ -240,7 +300,6 @@ function resetPageState() {
   calendarLoading.value = false
   calendarLoadFailed.value = false
   dtoLookup.value = new Map()
-  memberCalendarSnapshot.value = null
   memberDtoLookup.value = new Map()
 }
 
@@ -305,12 +364,12 @@ function calendarPolicyToFormPolicy(
     workDays: policy.workDays,
     leaveDays: policy.leaveDays,
     cycleStartDate: policy.cycleStartDate,
-    effectiveFrom: policy.cycleStartDate,
+    effectiveFrom: policy.effectiveFrom || policy.cycleStartDate,
   }
 }
 
 function leaveEntryToDisplayEntry(
-  entry: ReturnType<typeof PersonnelLeaveForm.buildAllEntries>[number],
+  entry: ReturnType<typeof PersonnelLeaveForm.buildMemberLeaveEntries>[number],
 ): LeaveDisplayEntry {
   return {
     id: entry.id,
@@ -328,7 +387,7 @@ function leaveEntryToDisplayEntry(
 }
 
 const leaveEntries = computed(() => {
-  // 员工视图走 memberCalendarSnapshot，不参与共享 leaveEntries 计算
+  // 员工视图走 memberCalendarMonths，不参与共享 leaveEntries 计算
   if (viewMode.value === 'member') return []
   if (!personnelList.value.length || !scope.value) return []
 
@@ -336,14 +395,7 @@ const leaveEntries = computed(() => {
     useBackend.value && calendarData.value && loadedCalendarYear.value === year.value
 
   if (backendReady) {
-    const all: ReturnType<typeof dtoToEntry>[] = []
-    for (const dto of calendarData.value!.actualEntries) {
-      all.push(dtoToEntry(dto))
-    }
-    for (const dto of calendarData.value!.computedEntries) {
-      all.push(dtoToEntry(dto))
-    }
-    return filterEntriesForScope(all)
+    return filterEntriesForScope(resolveComputedDisplayEntries(calendarData.value!, year.value))
   }
 
   // 接口失败时，仅管理员可回退到前端推算（generatePolicies 会为全员生成推算段）
@@ -373,7 +425,7 @@ const pageReady = computed(() => {
       !calendarLoading.value
     )
   }
-  return memberReady.value && memberCalendarSnapshot.value !== null
+  return memberReady.value && calendarData.value !== null
 })
 
 /** 双重校验：localStorage 非管理员则强制员工视图，忽略后端误报的 admin */
@@ -482,8 +534,11 @@ const calendarMonths = computed(() =>
   PersonnelLeaveForm.buildYearCalendar(year.value, visibleRows.value),
 )
 
-/** 员工日历：只读快照（无实际记录时含一段假设初始休假） */
-const memberCalendarMonths = computed(() => memberCalendarSnapshot.value ?? [])
+/** 员工日历：随当前查看年份与 API 数据实时渲染 */
+const memberCalendarMonths = computed(() => {
+  if (!calendarData.value || loadedCalendarYear.value !== year.value) return []
+  return buildMemberCalendarSnapshot(calendarData.value, year.value)
+})
 
 /** 员工视图：仅 actualEntries 的 ID 集合 */
 const memberActualEntryIds = computed(() => {
@@ -496,6 +551,10 @@ const actualEntryIds = computed(() => {
   if (!calendarData.value) return new Set<string>()
   return new Set(calendarData.value.actualEntries.map((dto) => dto.id))
 })
+
+const adminRequestEntryIds = computed(() => buildRequestEntryIds(calendarData.value))
+
+const memberRequestEntryIds = computed(() => buildRequestEntryIds(calendarData.value))
 
 let calendarRequestId = 0
 let initRequestId = 0
@@ -551,7 +610,6 @@ async function loadMemberCalendar(personnelId: string) {
     console.log('🔶 [loadMemberCalendar] sanitize 后 personnel:', data.personnel.length, '人, actualEntries:', data.actualEntries.length, '条')
     if (!data.personnel.length) {
       memberReady.value = false
-      memberCalendarSnapshot.value = null
       calendarLoadFailed.value = true
       ElMessage.error('无法识别当前用户的人员信息')
       return
@@ -562,7 +620,6 @@ async function loadMemberCalendar(personnelId: string) {
   } catch (error) {
     if (requestId !== calendarRequestId || requestedYear !== year.value) return
     memberReady.value = false
-    memberCalendarSnapshot.value = null
     calendarLoadFailed.value = true
     ElMessage.error(error instanceof Error ? error.message : '加载休假数据失败')
   } finally {
@@ -665,7 +722,6 @@ function buildDtoLookup(data: LeaveCalendarResponse) {
   return lookup
 }
 
-/** 点击日历格：已有 DTO 则编辑，否则用格子数据构造待保存的推算记录 */
 function openEditForEvent(event: CalendarDayCell['events'][number]) {
   const lookup = isPageAdmin.value
     ? (calendarData.value ? buildDtoLookup(calendarData.value) : new Map<string, LeaveEntryDTO>())
@@ -694,15 +750,24 @@ function openEditForEvent(event: CalendarDayCell['events'][number]) {
   dialogVisible.value = true
 }
 
+function openNewLeaveDialog(personnelId?: string) {
+  const pid = personnelId ?? scopedPersonnelId.value
+  if (!pid) return
+  editingEntry.value = null
+  editingPerson.value = personnelList.value.find((p) => p.id === pid) ?? null
+  dialogVisible.value = true
+  closeContextMenu()
+}
+
 function reloadCurrentCalendar() {
   if (viewMode.value === 'admin') {
-    void loadAdminCalendar()
-    return
+    return loadAdminCalendar()
   }
   const pid = scopedPersonnelId.value
   if (pid) {
-    void loadMemberCalendar(pid)
+    return loadMemberCalendar(pid)
   }
+  return Promise.resolve()
 }
 
 function onDialogSaved(_entry: LeaveEntryDTO) {
@@ -723,6 +788,34 @@ const policyForm = reactive({
 })
 const policySaving = ref(false)
 
+const policyDialogTitle = computed(() => {
+  if (!isPageAdmin.value) return '我的休假策略'
+  return `休假策略 — ${policyEditingPerson.value?.name ?? ''}`
+})
+
+function resolvePersistedPolicyId(
+  policies: LeaveCalendarResponse['policies'],
+  personnelId: string,
+): string | undefined {
+  const existing = policies.find((policy) => policy.personnelId === personnelId)
+  if (!existing || existing.synthetic) return undefined
+  return existing.id
+}
+
+async function persistLeavePolicy(
+  personnelId: string,
+  policies: LeaveCalendarResponse['policies'],
+) {
+  await savePolicy({
+    id: resolvePersistedPolicyId(policies, personnelId),
+    personnelId,
+    workDays: policyForm.workDays,
+    leaveDays: policyForm.leaveDays,
+    cycleStartDate: policyForm.cycleStartDate,
+    effectiveFrom: policyForm.cycleStartDate,
+  })
+}
+
 function openPolicyDialog(personnelId: string) {
   const person = personnelList.value.find((p) => p.id === personnelId)
   if (!person) return
@@ -738,32 +831,30 @@ function openPolicyDialog(personnelId: string) {
   } else {
     policyForm.workDays = 150
     policyForm.leaveDays = 19
-    policyForm.cycleStartDate = '2024-06-01'
+    policyForm.cycleStartDate = PersonnelLeaveForm.POLICY_DEFAULTS.baseDate
   }
 
   policyDialogVisible.value = true
   closeContextMenu()
 }
 
+function openMemberPolicyDialog() {
+  const pid = scopedPersonnelId.value
+  if (!pid) return
+  openPolicyDialog(pid)
+}
+
 async function handlePolicySave() {
   if (!policyEditingPerson.value) return
   const personnelId = policyEditingPerson.value.id
-  const existing = calendarData.value?.policies.find(
-    (p) => p.personnelId === personnelId,
-  )
+  const policies = calendarData.value?.policies ?? []
 
   policySaving.value = true
   try {
-    await savePolicy({
-      id: existing?.id,
-      personnelId,
-      workDays: policyForm.workDays,
-      leaveDays: policyForm.leaveDays,
-      cycleStartDate: policyForm.cycleStartDate,
-    })
+    await persistLeavePolicy(personnelId, policies)
     ElMessage.success('休假策略已保存')
     policyDialogVisible.value = false
-    await loadAdminCalendar()
+    await reloadCurrentCalendar()
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '保存失败')
   } finally {
@@ -954,6 +1045,7 @@ onBeforeUnmount(() => {
           :hovered-month="hoveredMonth"
           :pinned-month="pinnedMonth"
           :actual-entry-ids="actualEntryIds"
+          :request-entry-ids="adminRequestEntryIds"
           :hovered-personnel-id="hoveredPersonnelId"
           :hovered-month-personnel-ids="hoveredMonthPersonnelIds"
           @edit-entry="openEditForEvent"
@@ -967,13 +1059,25 @@ onBeforeUnmount(() => {
     <template v-else-if="viewMode === 'member'">
       <!-- 普通员工：年份切换 + 本人日历（可编辑） -->
       <div class="leave-toolbar leave-toolbar--member">
-        <div class="year-switcher">
-          <el-button link @click="changeYear(-1)">
-            <el-icon><ArrowLeft /></el-icon>
+        <div class="member-toolbar-row">
+          <div class="year-switcher">
+            <el-button link @click="changeYear(-1)">
+              <el-icon><ArrowLeft /></el-icon>
+            </el-button>
+            <span class="year-label">{{ year }}</span>
+            <el-button link @click="changeYear(1)">
+              <el-icon><ArrowRight /></el-icon>
+            </el-button>
+          </div>
+
+          <el-button class="member-policy-btn member-create-btn" size="small" type="primary" @click="openNewLeaveDialog()">
+            <el-icon><Plus /></el-icon>
+            新建请假
           </el-button>
-          <span class="year-label">{{ year }}</span>
-          <el-button link @click="changeYear(1)">
-            <el-icon><ArrowRight /></el-icon>
+
+          <el-button class="member-policy-btn" size="small" @click="openMemberPolicyDialog">
+            <el-icon><Setting /></el-icon>
+            休假策略
           </el-button>
         </div>
       </div>
@@ -989,6 +1093,7 @@ onBeforeUnmount(() => {
           :hovered-month="null"
           :pinned-month="null"
           :actual-entry-ids="memberActualEntryIds"
+          :request-entry-ids="memberRequestEntryIds"
           :hovered-personnel-id="null"
           :hovered-month-personnel-ids="emptyMonthPersonnelIds"
           @edit-entry="openEditForEvent"
@@ -1030,6 +1135,14 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="ctx-menu-item"
+            @click="openNewLeaveDialog(ctxMenuTarget!)"
+          >
+            <el-icon><Plus /></el-icon>
+            新建请假
+          </button>
+          <button
+            type="button"
+            class="ctx-menu-item"
             @click="openPolicyDialog(ctxMenuTarget!)"
           >
             <el-icon><Setting /></el-icon>
@@ -1060,14 +1173,14 @@ onBeforeUnmount(() => {
       v-model:visible="dialogVisible"
       :entry="editingEntry"
       :person="editingPerson"
+      :member-mode="viewMode === 'member'"
       @saved="onDialogSaved"
       @deleted="onDialogDeleted"
     />
 
     <el-dialog
-      v-if="isPageAdmin"
       v-model="policyDialogVisible"
-      :title="`休假策略 — ${policyEditingPerson?.name ?? ''}`"
+      :title="policyDialogTitle"
       width="420px"
       :close-on-click-modal="false"
       @close="policyDialogVisible = false"
@@ -1139,7 +1252,7 @@ onBeforeUnmount(() => {
   background: var(--el-bg-color);
 }
 
-/* 左侧年份 + 右侧两组纵向排列（设计组一行、细化组一行） */
+/* 左侧年份 + 右侧各组各占一行（组按钮与组内员工同一行） */
 .leave-toolbar {
   display: flex;
   align-items: flex-start;
@@ -1160,20 +1273,21 @@ onBeforeUnmount(() => {
   min-width: 72px;
 }
 
-/* 关键：纵向 flex，禁止设计组/细化组并排 */
+/* 设计组 / 细化组各占一行，组内横向排列 */
 .team-groups-panel {
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
 .team-group {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   width: 100%;
   flex: 0 0 auto;
@@ -1183,15 +1297,39 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
-.leave-toolbar--member {
-  justify-content: flex-start;
+.leave-toolbar.leave-toolbar--member {
+  align-items: center;
+}
+
+.member-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .leave-toolbar--member .year-switcher {
-  padding-top: 4px;
+  padding-top: 0;
+}
+
+.member-policy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.member-policy-btn :deep(.el-icon) {
+  font-size: 13px;
+}
+
+.member-create-btn {
+  font-weight: 500;
 }
 
 .year-label {
@@ -1280,8 +1418,10 @@ onBeforeUnmount(() => {
 .team-members {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .legend-dot {

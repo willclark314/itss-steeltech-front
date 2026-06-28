@@ -7,10 +7,12 @@ import type { PersonnelRecord } from '@/models/personnel/PersonnelForm'
 
 const props = defineProps<{
   visible: boolean
-  /** 要编辑的休假条目 */
+  /** 要编辑的休假条目；为空且 person 有值时为新建 */
   entry: LeaveEntryDTO | null
   /** 关联的人员信息 */
   person: PersonnelRecord | null
+  /** 员工新建请假：简化界面，固定为计划轮休 */
+  memberMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -20,7 +22,8 @@ const emit = defineEmits<{
 }>()
 
 const TYPE_OPTIONS = [
-  { label: '计划轮休', value: 'regular' },
+  { label: '年休', value: 'regular' },
+  { label: '请假', value: 'request' },
   { label: '延长休假', value: 'extended' },
   { label: '提前休假', value: 'early' },
 ] as const
@@ -48,21 +51,39 @@ const computedDays = computed(() => {
 /** 是否为实际已有记录（非计算值） */
 const isActual = computed(() => props.entry != null && !props.entry.computed)
 
+const isCreateMode = computed(() => !props.entry && !!props.person)
+
+const simplifyForm = computed(() => props.memberMode === true && isCreateMode.value)
+
+function resetCreateForm() {
+  form.type = 'request'
+  form.startDate = ''
+  form.endDate = ''
+  form.reason = ''
+  form.remark = ''
+}
+
 const title = computed(() => {
   const name = props.person?.name ?? props.entry?.personnelId ?? ''
+  if (isCreateMode.value) {
+    return name ? `新建请假 — ${name}` : '新建请假'
+  }
   const typeLabel = TYPE_OPTIONS.find((t) => t.value === props.entry?.type)?.label ?? ''
   return `休假编辑 — ${name}${typeLabel ? ` · ${typeLabel}` : ''}`
 })
 
 watch(
-  () => props.entry,
-  (entry) => {
+  () => [props.visible, props.entry] as const,
+  ([visible, entry]) => {
+    if (!visible) return
     if (entry) {
       form.type = entry.type
       form.startDate = entry.startDate
       form.endDate = entry.endDate
       form.reason = entry.reason || ''
       form.remark = entry.remark || ''
+    } else {
+      resetCreateForm()
     }
   },
   { immediate: true },
@@ -77,21 +98,25 @@ async function handleSave() {
     ElMessage.warning('结束日期不能早于开始日期')
     return
   }
-  if (!props.entry) return
+
+  const personnelId = props.entry?.personnelId ?? props.person?.id
+  if (!personnelId) return
 
   const payload: Partial<LeaveEntryDTO> = {
-    id: isActual.value ? props.entry.id : undefined,
-    personnelId: props.entry.personnelId,
+    id: isActual.value ? props.entry!.id : undefined,
+    personnelId,
     type: form.type,
     startDate: form.startDate,
     endDate: form.endDate,
     plannedDays: computedDays.value,
+    reason: form.reason || undefined,
+    remark: form.remark || undefined,
   }
 
   saving.value = true
   try {
     const result = await saveLeaveEntry(payload)
-    ElMessage.success('休假记录已保存')
+    ElMessage.success(isCreateMode.value ? '请假已提交' : '休假记录已保存')
     emit('saved', result)
     emit('update:visible', false)
   } catch (error) {
@@ -155,7 +180,7 @@ function handleClose() {
     @update:model-value="handleClose"
   >
     <el-form label-position="top" size="default">
-      <el-form-item label="休假类型">
+      <el-form-item v-if="!simplifyForm" label="休假类型">
         <el-select v-model="form.type" style="width: 100%">
           <el-option
             v-for="opt in TYPE_OPTIONS"
@@ -191,10 +216,15 @@ function handleClose() {
         </el-col>
       </el-row>
 
-      <el-form-item>
-        <span class="days-badge">
-          共 <strong>{{ computedDays }}</strong> 天
-          <template v-if="entry">
+      <el-form-item :label="simplifyForm ? '请假天数' : undefined">
+        <span class="days-badge" :class="{ 'days-badge--large': simplifyForm }">
+          <template v-if="computedDays > 0">
+            共 <strong>{{ computedDays }}</strong> 天
+          </template>
+          <template v-else>
+            请选择起止日期
+          </template>
+          <template v-if="entry && !isCreateMode">
             （原 {{ entry.plannedDays }} 天）
           </template>
         </span>
@@ -248,7 +278,7 @@ function handleClose() {
         <div class="footer-right">
           <el-button @click="handleClose">取消</el-button>
           <el-button type="primary" :loading="saving" @click="handleSave">
-            保存
+            {{ isCreateMode ? '提交请假' : '保存' }}
           </el-button>
         </div>
       </div>
@@ -266,6 +296,16 @@ function handleClose() {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   font-size: 14px;
+}
+
+.days-badge--large {
+  padding: 8px 16px;
+  font-size: 15px;
+}
+
+.days-badge--large strong {
+  font-size: 20px;
+  margin: 0 2px;
 }
 
 .entry-meta {

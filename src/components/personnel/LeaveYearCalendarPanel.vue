@@ -14,6 +14,8 @@ const props = withDefaults(
     hoveredMonth: number | null
     pinnedMonth: number | null
     actualEntryIds: Set<string>
+    /** 手工请假记录 ID（用于勾标橙色） */
+    requestEntryIds: Set<string>
     hoveredPersonnelId: string | null
     hoveredMonthPersonnelIds: Set<string>
     /** 员工视图：无月份筛选、无人员高亮 */
@@ -139,6 +141,22 @@ function hasHoveredMonthPersonLeave(cell: CalendarDayCell) {
 
 function hasActualEntry(cell: CalendarDayCell) {
   return cell.events.some((event) => props.actualEntryIds.has(event.id))
+}
+
+/** 年休：计划轮休；请假：手工申请 */
+function resolveEventLeaveCategory(event: CalendarDayCell['events'][number]): 'annual' | 'request' {
+  const dto = props.dtoLookup.get(event.id)
+  const type = dto?.type ?? event.type
+  if (type === 'request' || type === 'extended' || type === 'early') return 'request'
+  if (props.requestEntryIds.has(event.id)) return 'request'
+  return 'annual'
+}
+
+function resolvePersistedCellLeaveCategory(cell: CalendarDayCell): 'annual' | 'request' | null {
+  const persistedEvents = cell.events.filter((event) => props.actualEntryIds.has(event.id))
+  if (!persistedEvents.length) return null
+  const categories = persistedEvents.map((event) => resolveEventLeaveCategory(event))
+  return categories.includes('request') ? 'request' : 'annual'
 }
 
 function getLeaveTypeMeta(type: LeaveEntryType) {
@@ -289,7 +307,11 @@ function getEventColor(event: CalendarDayCell['events'][number]) {
               @contextmenu.prevent="canEditLeave && cell.inMonth && cell.events.length && openDayContextMenu($event, cell)"
             >
               <span v-if="cell.inMonth" class="day-number">{{ cell.day }}</span>
-              <i v-if="canEditLeave && cell.inMonth && hasActualEntry(cell)" class="day-checkmark" />
+              <i
+                v-if="cell.inMonth && resolvePersistedCellLeaveCategory(cell)"
+                class="day-checkmark"
+                :class="`is-${resolvePersistedCellLeaveCategory(cell)}`"
+              />
             </div>
           </el-tooltip>
         </div>
@@ -552,8 +574,16 @@ function getEventColor(event: CalendarDayCell['events'][number]) {
   display: block;
   width: 100%;
   height: 100%;
-  background: var(--el-color-primary);
+  background: #67c23a;
   border-radius: 50%;
+}
+
+.day-checkmark.is-annual::before {
+  background: #67c23a;
+}
+
+.day-checkmark.is-request::before {
+  background: #e6a23c;
 }
 
 .day-checkmark::after {

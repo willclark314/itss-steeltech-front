@@ -19,9 +19,16 @@ export interface LeaveCalendarResponse {
     workDays: number
     leaveDays: number
     cycleStartDate: string
+    effectiveFrom?: string
+    /** 后端推算用默认策略，未入库 */
+    synthetic?: boolean
   }>
   actualEntries: LeaveEntryDTO[]
   computedEntries: LeaveEntryDTO[]
+  /** 每人全局最晚一条轮休记录（不受查看年份限制） */
+  lastLeaveAnchors?: Record<string, { startDate: string; endDate: string }>
+  /** 每人全局最早一条轮休记录（不受查看年份限制） */
+  earliestLeaveAnchors?: Record<string, { startDate: string; endDate: string }>
 }
 
 /** 后端休假策略 DTO */
@@ -41,7 +48,7 @@ export interface LeavePolicyDTO {
 export interface LeaveEntryDTO {
   id: string
   personnelId: string
-  type: 'regular' | 'extended' | 'early'
+  type: 'regular' | 'extended' | 'early' | 'request'
   startDate: string
   endDate: string
   plannedDays: number

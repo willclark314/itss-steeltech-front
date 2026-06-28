@@ -1,5 +1,5 @@
-/** 休假类型：计划轮休 / 延长休假 / 提前休假 */
-export type LeaveEntryType = 'regular' | 'extended' | 'early'
+/** 休假类型：计划轮休 / 延长休假 / 提前休假 / 请假 */
+export type LeaveEntryType = 'regular' | 'extended' | 'early' | 'request'
 
 /** 休假记录状态 */
 export type LeaveEntryStatus = 'planned' | 'active' | 'completed' | 'cancelled'
@@ -129,16 +129,19 @@ export class PersonnelLeaveForm {
     REGULAR: 'regular',
     EXTENDED: 'extended',
     EARLY: 'early',
+    REQUEST: 'request',
   } as const
 
   static readonly TYPE_OPTIONS = [
     { label: '计划轮休', value: PersonnelLeaveForm.TYPE.REGULAR },
+    { label: '请假', value: PersonnelLeaveForm.TYPE.REQUEST },
     { label: '延长休假', value: PersonnelLeaveForm.TYPE.EXTENDED },
     { label: '提前休假', value: PersonnelLeaveForm.TYPE.EARLY },
   ]
 
-  static readonly TYPE_MAP: Record<LeaveEntryType, { label: string; type: 'primary' | 'warning' | 'info' }> = {
-    regular: { label: '计划轮休', type: 'primary' },
+  static readonly TYPE_MAP: Record<LeaveEntryType, { label: string; type: 'primary' | 'warning' | 'info' | 'success' }> = {
+    regular: { label: '年休', type: 'primary' },
+    request: { label: '请假', type: 'warning' },
     extended: { label: '延长休假', type: 'warning' },
     early: { label: '提前休假', type: 'info' },
   }
@@ -167,7 +170,7 @@ export class PersonnelLeaveForm {
     /** 每次休假天数 */
     leaveDays: 19,
     /** 周期错开的基准日期，各人从此日起按索引偏移 */
-    baseDate: '2024-06-01',
+    baseDate: '2020-01-01',
   } as const
 
   /** 完整周期长度（天） */
@@ -222,14 +225,12 @@ export class PersonnelLeaveForm {
 
     let cursor: Date
     if (anchorOverride) {
-      // 锚点 = 最后实际休假记录的 startDate
-      // 下一周期的 cursor = anchor + leaveDays
-      const anchorDate = new Date(anchorOverride)
-      cursor = new Date(anchorDate.getTime() + leaveDays * msPerDay)
+      const lastEnd = new Date(`${anchorOverride}T12:00:00`)
+      cursor = new Date(lastEnd.getTime() + msPerDay)
     } else {
-      const cycleStart = new Date(cycleStartDate)
-      // 回退两个周期，确保捕获跨年边界附近的休假段
-      cursor = new Date(cycleStart.getTime() - 2 * cycleDays * msPerDay)
+      const cycleStart = new Date(`${cycleStartDate}T12:00:00`)
+      // 无实际记录时从周期锚点正向推算，避免锚点之前出现虚假休假段
+      cursor = cycleStart
     }
 
     const entries: PersonnelLeaveEntry[] = []
@@ -279,6 +280,7 @@ export class PersonnelLeaveForm {
     year: number,
     today: Date = new Date(),
     lastEntryMap?: Map<string, string>,
+    futureOnly = false,
   ): PersonnelLeaveEntry[] {
     const all: PersonnelLeaveEntry[] = []
     for (const policy of policies) {
@@ -286,9 +288,110 @@ export class PersonnelLeaveForm {
       const entries = PersonnelLeaveForm.computeLeaveEntriesForYear(
         policy, year, today,
         anchor,
-        !!anchor,
+        futureOnly && !!anchor,
       )
       all.push(...entries)
+    }
+    return all.sort((a, b) => a.startDate.localeCompare(b.startDate))
+  }
+
+  /** 员工视图：历史推算下限（默认 2020-01-01；周期起始更早则用起始日） */
+  static readonly MEMBER_BACKWARD_FLOOR = '2020-01-01'
+
+  static resolveMemberBackwardLimit(policy: PersonnelLeavePolicy): string {
+    const floor = PersonnelLeaveForm.MEMBER_BACKWARD_FLOOR
+    return policy.cycleStartDate < floor ? policy.cycleStartDate : floor
+  }
+
+  /**
+   * 员工视图：以最早入库记录为网格锚点，向前/向后推算当前查看年份内的休假段。
+   * 无入库记录时仅从周期起始日正向推算。
+   */
+  static computeMemberLeaveEntriesForYear(
+    policy: PersonnelLeavePolicy,
+    year: number,
+    today: Date = new Date(),
+    earliestLeaveStart?: string,
+  ): PersonnelLeaveEntry[] {
+    if (!earliestLeaveStart) {
+      return PersonnelLeaveForm.computeLeaveEntriesForYear(
+        policy, year, today, undefined, false,
+      )
+    }
+
+    const { workDays, leaveDays, personnelId } = policy
+    const cycleDays = workDays + leaveDays
+    const msPerDay = 24 * 60 * 60 * 1000
+
+    const yearStart = new Date(year, 0, 1)
+    const yearEnd = new Date(year, 11, 31)
+    const searchEnd = new Date(year + 1, 11, 31)
+    const backwardLimit = new Date(
+      `${PersonnelLeaveForm.resolveMemberBackwardLimit(policy)}T12:00:00`,
+    )
+
+    const earliestStart = new Date(`${earliestLeaveStart}T12:00:00`)
+    const anchorCursorMs = earliestStart.getTime() - workDays * msPerDay
+
+    let n = 0
+    while (n > -5000) {
+      const prevCursorMs = anchorCursorMs + (n - 1) * cycleDays * msPerDay
+      const prevLeaveEndMs = prevCursorMs + workDays * msPerDay + (leaveDays - 1) * msPerDay
+      if (prevLeaveEndMs < backwardLimit.getTime()) break
+      n -= 1
+    }
+
+    const entries: PersonnelLeaveEntry[] = []
+    let seq = 1
+
+    for (let i = n; ; i += 1) {
+      const cursorMs = anchorCursorMs + i * cycleDays * msPerDay
+      if (cursorMs > searchEnd.getTime()) break
+
+      const leaveStart = new Date(cursorMs + workDays * msPerDay)
+      const leaveEnd = new Date(leaveStart.getTime() + (leaveDays - 1) * msPerDay)
+
+      if (leaveEnd.getTime() < backwardLimit.getTime()) continue
+
+      if (leaveEnd >= yearStart && leaveStart <= yearEnd) {
+        const status: LeaveEntryStatus =
+          leaveEnd < today ? 'completed'
+          : leaveStart > today ? 'planned'
+          : 'active'
+
+        entries.push({
+          id: `${personnelId}_MREG_${seq}`,
+          personnelId,
+          type: 'regular',
+          startDate: leaveStart.toISOString().slice(0, 10),
+          endDate: leaveEnd.toISOString().slice(0, 10),
+          plannedDays: leaveDays,
+          actualDays: status === 'completed' ? leaveDays : undefined,
+          status,
+          createdAt: '',
+        })
+        seq += 1
+      }
+    }
+
+    return entries
+  }
+
+  /** 员工视图：合并各人员策略在当前年的推算段 */
+  static buildMemberLeaveEntries(
+    policies: PersonnelLeavePolicy[],
+    year: number,
+    today: Date = new Date(),
+    earliestLeaveStartMap?: Map<string, string>,
+  ): PersonnelLeaveEntry[] {
+    const all: PersonnelLeaveEntry[] = []
+    for (const policy of policies) {
+      const earliestStart = earliestLeaveStartMap?.get(policy.personnelId)
+      all.push(
+        ...PersonnelLeaveForm.computeMemberLeaveEntriesForYear(
+          policy, year, today, earliestStart,
+        ),
+      )
     }
     return all.sort((a, b) => a.startDate.localeCompare(b.startDate))
   }
