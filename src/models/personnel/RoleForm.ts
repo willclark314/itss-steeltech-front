@@ -1,7 +1,7 @@
 import type { FormRules } from 'element-plus'
 
 export type RoleStatus = 'active' | 'inactive'
-export type PermissionAction = 'view' | 'create' | 'update' | 'delete'
+export type PermissionAction = 'view' | 'edit'
 
 export interface PermissionRecord {
   id: string
@@ -97,74 +97,78 @@ export class RoleForm {
 
   static readonly ACTION_LABELS: Record<PermissionAction, string> = {
     view: '查看',
-    create: '新增',
-    update: '编辑',
-    delete: '删除',
+    edit: '编辑',
   }
 
   static readonly PAGE_DEFINITIONS: PageDefinition[] = [
-    { pageKey: 'home', pageName: '首页', module: '门户', path: '/home', actions: ['view'] },
+    { pageKey: 'home', pageName: '首页', module: '门户', path: '/home', actions: ['view', 'edit'] },
     {
       pageKey: 'about',
       pageName: '关于',
       module: '门户',
       path: '/portal/about',
-      actions: ['view'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'contact',
       pageName: '联系单',
       module: '业务系统',
       path: '/business/contact',
-      actions: ['view', 'create', 'update', 'delete'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'project',
       pageName: '项目',
       module: '业务系统',
       path: '/business/project',
-      actions: ['view', 'create', 'update', 'delete'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'schedule',
       pageName: '工作安排',
       module: '业务系统',
       path: '/business/schedule',
-      actions: ['view'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'person',
       pageName: '人员',
       module: '人员系统',
       path: '/personnel/person',
-      actions: ['view', 'create', 'update', 'delete'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'role',
       pageName: '角色',
       module: '人员系统',
       path: '/personnel/role',
-      actions: ['view', 'create', 'update', 'delete'],
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'leave',
       pageName: '休假',
       module: '人员系统',
       path: '/personnel/leave',
-      actions: ['view'],
+      actions: ['view', 'edit'],
+    },
+    {
+      pageKey: 'monthly-rest',
+      pageName: '月休计划',
+      module: '人员系统',
+      path: '/personnel/monthly-rest',
+      actions: ['view', 'edit'],
     },
     {
       pageKey: 'system-settings',
       pageName: '全局配置',
       module: '系统设置',
       path: '/system/settings',
-      actions: ['view', 'update'],
+      actions: ['view', 'edit'],
     },
   ]
 
-  static readonly CRUD_ACTIONS: PermissionAction[] = ['view', 'create', 'update', 'delete']
-  static readonly VIEW_ACTIONS: PermissionAction[] = ['view']
-  static readonly ACTION_ORDER: PermissionAction[] = ['view', 'create', 'update', 'delete']
+  static readonly PAGE_ACTIONS: PermissionAction[] = ['view', 'edit']
+  static readonly ACTION_ORDER: PermissionAction[] = ['view', 'edit']
 
   static readonly MODULE_ORDER: string[] = [
     ...new Set(RoleForm.PAGE_DEFINITIONS.map((page) => page.module)),

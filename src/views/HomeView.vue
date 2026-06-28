@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { getUser } from '@/utils/auth'
+import { getUser, isAdminUser } from '@/utils/auth'
 
 const router = useRouter()
 
 // ── 当前用户权限 ──
-const isAdminUser =
-  getUser()?.loginType === 'dev' || getUser()?.username === 'admin'
+const isAdminUserFlag = isAdminUser(getUser())
 
 interface FeatureLink {
   path: string
@@ -34,7 +33,7 @@ const systemModules = computed<SystemModule[]>(() => {
   ]
 
   // 仅管理员可见：业务系统
-  if (isAdminUser) {
+  if (isAdminUserFlag) {
     modules.push({
       name: '业务系统',
       summary: '支撑日常业务协同，管理项目与工程联系单。',
@@ -49,7 +48,7 @@ const systemModules = computed<SystemModule[]>(() => {
   modules.push({
     name: '人员系统',
     summary: '钢结构技术科人员信息与休假安排管理。',
-    links: isAdminUser
+    links: isAdminUserFlag
       ? [
           { path: '/personnel/person', title: '人员', description: '人员档案查询、详情编辑及按班组/国籍/宿舍分组' },
           { path: '/personnel/role', title: '角色', description: '角色管理、关联人员与页面访问权限配置' },
@@ -63,7 +62,7 @@ const systemModules = computed<SystemModule[]>(() => {
   })
 
   // 仅管理员可见：系统设置
-  if (isAdminUser) {
+  if (isAdminUserFlag) {
     modules.push({
       name: '系统设置',
       summary: '系统级参数与全局配置，对所有用户生效。',

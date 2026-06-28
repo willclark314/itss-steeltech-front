@@ -1,5 +1,4 @@
 import type { PersonnelRecord } from '../personnel'
-import type { PersonnelEntity } from '../db/PersonnelEntity'
 
 export interface UserPersonnelProfile {
   id: string
@@ -27,9 +26,7 @@ export interface UserPersonnelProfile {
   status: string
 }
 
-type ProfileSource = PersonnelRecord | PersonnelEntity
-
-export function toUserProfile(record: ProfileSource): UserPersonnelProfile {
+export function toUserProfile(record: PersonnelRecord): UserPersonnelProfile {
   return {
     id: record.id,
     name: record.name,

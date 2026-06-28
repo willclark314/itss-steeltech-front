@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Lock, Moon, Sunny, User } from '@element-plus/icons-vue'
 import { login } from '@/api/auth'
 import { setToken, setUser } from '@/utils/auth'
@@ -10,6 +10,7 @@ const props = defineProps<{
   embedded?: boolean
 }>()
 
+const route = useRoute()
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
@@ -38,15 +39,25 @@ async function handleLogin() {
       username: form.username,
       password: form.password,
     })
+    if (!res.token) {
+      ElMessage.error('登录响应异常，请稍后重试')
+      return
+    }
     setToken(res.token)
     setUser({ ...res.user, password: form.password })
     ElMessage.success('登录成功')
-    router.push('/home')
   } catch {
     ElMessage.error('登录失败，请检查工号和密码')
+    return
   } finally {
     loading.value = false
   }
+
+  const redirect =
+    typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+      ? route.query.redirect
+      : '/home'
+  await router.replace(redirect)
 }
 </script>
 

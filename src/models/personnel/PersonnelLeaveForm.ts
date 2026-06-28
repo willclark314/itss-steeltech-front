@@ -1,5 +1,5 @@
-/** 休假类型：计划轮休 / 延长休假 / 临时休假 */
-export type LeaveEntryType = 'regular' | 'extended' | 'temporary'
+/** 休假类型：计划轮休 / 延长休假 / 提前休假 */
+export type LeaveEntryType = 'regular' | 'extended' | 'early'
 
 /** 休假记录状态 */
 export type LeaveEntryStatus = 'planned' | 'active' | 'completed' | 'cancelled'
@@ -40,7 +40,7 @@ export interface PersonnelLeavePolicyRevision {
  * 单次休假记录
  * - regular：按周期计划的轮休
  * - extended：在计划休假基础上延长
- * - temporary：临时休假（不依附周期）
+ * - early：提前休假（未满工作天数即申请休假）
  */
 export interface PersonnelLeaveEntry {
   id: string
@@ -128,19 +128,19 @@ export class PersonnelLeaveForm {
   static readonly TYPE = {
     REGULAR: 'regular',
     EXTENDED: 'extended',
-    TEMPORARY: 'temporary',
+    EARLY: 'early',
   } as const
 
   static readonly TYPE_OPTIONS = [
     { label: '计划轮休', value: PersonnelLeaveForm.TYPE.REGULAR },
     { label: '延长休假', value: PersonnelLeaveForm.TYPE.EXTENDED },
-    { label: '临时休假', value: PersonnelLeaveForm.TYPE.TEMPORARY },
+    { label: '提前休假', value: PersonnelLeaveForm.TYPE.EARLY },
   ]
 
   static readonly TYPE_MAP: Record<LeaveEntryType, { label: string; type: 'primary' | 'warning' | 'info' }> = {
     regular: { label: '计划轮休', type: 'primary' },
     extended: { label: '延长休假', type: 'warning' },
-    temporary: { label: '临时休假', type: 'info' },
+    early: { label: '提前休假', type: 'info' },
   }
 
   static readonly STATUS = {
@@ -160,130 +160,166 @@ export class PersonnelLeaveForm {
     cancelled: { label: '已取消', type: 'danger' },
   }
 
-  static readonly PERSONNEL_COUNT = 17
+  /** 默认休假策略参数 — 不入库，纯计算 */
+  static readonly POLICY_DEFAULTS = {
+    /** 默认工作天数（间隔 150 天休一次） */
+    workDays: 150,
+    /** 每次休假天数 */
+    leaveDays: 19,
+    /** 周期错开的基准日期，各人从此日起按索引偏移 */
+    baseDate: '2024-06-01',
+  } as const
 
-  static buildDefaultPolicies(): PersonnelLeavePolicy[] {
-    return Array.from({ length: PersonnelLeaveForm.PERSONNEL_COUNT }, (_, index) => {
-      const personnelId = `PER${String(index + 1).padStart(3, '0')}`
+  /** 完整周期长度（天） */
+  static get CYCLE_DAYS(): number {
+    return PersonnelLeaveForm.POLICY_DEFAULTS.workDays + PersonnelLeaveForm.POLICY_DEFAULTS.leaveDays
+  }
+
+  /**
+   * 根据实际人员列表生成每人一条休假策略。
+   * 所有人的 workDays/leaveDays 取 POLICY_DEFAULTS，
+   * cycleStartDate 按人员索引均匀错开（错开总跨度 = 一个完整周期），
+   * 避免多人同时休假。
+   */
+  static generatePolicies(personnelList: Array<{ id: string }>): PersonnelLeavePolicy[] {
+    const { workDays, leaveDays, baseDate } = PersonnelLeaveForm.POLICY_DEFAULTS
+    const total = personnelList.length || 1
+    const staggerStep = Math.floor(PersonnelLeaveForm.CYCLE_DAYS / total)
+
+    return personnelList.map((person, index) => {
+      const offsetDays = index * staggerStep
+      const cycleStart = new Date(baseDate)
+      cycleStart.setDate(cycleStart.getDate() + offsetDays)
+
       return {
-        id: `LVP${String(index + 1).padStart(3, '0')}`,
-        personnelId,
-        workDays: 135,
-        leaveDays: 19,
-        cycleStartDate: `2025-${String((index % 12) + 1).padStart(2, '0')}-15`,
-        effectiveFrom: index === 0 ? '2026-01-15' : '2026-01-10',
-        remark: index === 0 ? '由 140/18 调整为 135/19' : undefined,
+        id: `POL_${person.id}`,
+        personnelId: person.id,
+        workDays,
+        leaveDays,
+        cycleStartDate: cycleStart.toISOString().slice(0, 10),
+        effectiveFrom: baseDate,
       }
     })
   }
 
-  static readonly DEFAULT_POLICIES: PersonnelLeavePolicy[] =
-    PersonnelLeaveForm.buildDefaultPolicies()
+  /**
+   * 根据策略计算指定年份内所有的「计划轮休」休假段。
+   * 不依赖外部状态 — 纯函数，结果可随时复算。
+   */
+  static computeLeaveEntriesForYear(
+    policy: PersonnelLeavePolicy,
+    year: number,
+    today: Date = new Date(),
+    anchorOverride?: string,
+    futureOnly = false,
+  ): PersonnelLeaveEntry[] {
+    const { workDays, leaveDays, cycleStartDate, personnelId } = policy
+    const cycleDays = workDays + leaveDays
+    const msPerDay = 24 * 60 * 60 * 1000
 
-  static readonly DEFAULT_REVISIONS: PersonnelLeavePolicyRevision[] = [
-    {
-      id: 'LVPR001',
-      personnelId: 'PER001',
-      effectiveFrom: '2026-01-15',
-      previousWorkDays: 140,
-      previousLeaveDays: 18,
-      workDays: 135,
-      leaveDays: 19,
-      reason: '岗位调整，缩短轮休间隔',
-      createdAt: '2026-01-14 10:00',
-    },
-  ]
+    const yearStart = new Date(year, 0, 1)
+    const yearEnd = new Date(year, 11, 31)
 
-  static addDays(dateStr: string, days: number) {
-    const date = new Date(dateStr)
-    date.setDate(date.getDate() + days)
-    return date.toISOString().slice(0, 10)
-  }
+    let cursor: Date
+    if (anchorOverride) {
+      // 锚点 = 最后实际休假记录的 startDate
+      // 下一周期的 cursor = anchor + leaveDays
+      const anchorDate = new Date(anchorOverride)
+      cursor = new Date(anchorDate.getTime() + leaveDays * msPerDay)
+    } else {
+      const cycleStart = new Date(cycleStartDate)
+      // 回退两个周期，确保捕获跨年边界附近的休假段
+      cursor = new Date(cycleStart.getTime() - 2 * cycleDays * msPerDay)
+    }
 
-  static buildDefaultEntries(): PersonnelLeaveEntry[] {
     const entries: PersonnelLeaveEntry[] = []
-    let sequence = 1
+    let seq = 1
 
-    const push = (entry: Omit<PersonnelLeaveEntry, 'id'>) => {
-      entries.push({
-        ...entry,
-        id: `LVE${String(sequence).padStart(3, '0')}`,
-      })
-      sequence += 1
-    }
+    // 最多迭代到 year+1 年底（覆盖跨年）
+    const searchEnd = new Date(year + 1, 11, 31)
+    while (cursor.getTime() <= searchEnd.getTime()) {
+      const leaveStart = new Date(cursor.getTime() + workDays * msPerDay)
+      const leaveEnd = new Date(leaveStart.getTime() + (leaveDays - 1) * msPerDay)
 
-    push({
-      personnelId: 'PER001',
-      type: 'regular',
-      startDate: '2026-04-15',
-      endDate: '2026-05-03',
-      plannedDays: 19,
-      actualDays: 19,
-      status: 'completed',
-      createdAt: '2026-03-01 09:00',
-    })
-    push({
-      personnelId: 'PER001',
-      type: 'extended',
-      startDate: '2026-05-03',
-      endDate: '2026-05-08',
-      plannedDays: 5,
-      actualDays: 5,
-      status: 'completed',
-      parentLeaveId: 'LVE001',
-      reason: '家属事务，在原计划休假结束后延长 5 天',
-      createdAt: '2026-04-20 14:00',
-    })
-    push({
-      personnelId: 'PER001',
-      type: 'regular',
-      startDate: '2026-09-28',
-      endDate: '2026-10-16',
-      plannedDays: 19,
-      status: 'planned',
-      createdAt: '2026-06-01 09:00',
-    })
-
-    for (let index = 2; index <= PersonnelLeaveForm.PERSONNEL_COUNT; index += 1) {
-      const personnelId = `PER${String(index).padStart(3, '0')}`
-      const month = ((index * 2 - 1) % 12) + 1
-      const startDay = Math.min(8 + (index % 12), 28)
-      const startDate = `2026-${String(month).padStart(2, '0')}-${String(startDay).padStart(2, '0')}`
-      const endDate = PersonnelLeaveForm.addDays(startDate, 18)
-
-      let status: LeaveEntryStatus = 'completed'
-      if (index === 6 || index === 7) {
-        status = 'active'
-      } else if (index % 5 === 0) {
-        status = 'planned'
+      // futureOnly 模式：跳过已结束的条目
+      if (futureOnly && leaveEnd < today) {
+        cursor = new Date(cursor.getTime() + cycleDays * msPerDay)
+        continue
       }
 
-      push({
-        personnelId,
-        type: 'regular',
-        startDate,
-        endDate,
-        plannedDays: 19,
-        actualDays: status === 'completed' ? 19 : undefined,
-        status,
-        createdAt: '2026-01-15 09:00',
-      })
-    }
+      if (leaveEnd >= yearStart && leaveStart <= yearEnd) {
+        const status: LeaveEntryStatus =
+          leaveEnd < today ? 'completed'
+          : leaveStart > today ? 'planned'
+          : 'active'
 
-    push({
-      personnelId: 'PER010',
-      type: 'temporary',
-      startDate: '2026-06-01',
-      endDate: '2026-06-05',
-      plannedDays: 5,
-      status: 'active',
-      reason: '临时回国办理证件',
-      createdAt: '2026-05-28 11:00',
-    })
+        entries.push({
+          id: `${personnelId}_REG_${seq}`,
+          personnelId,
+          type: 'regular',
+          startDate: leaveStart.toISOString().slice(0, 10),
+          endDate: leaveEnd.toISOString().slice(0, 10),
+          plannedDays: leaveDays,
+          actualDays: status === 'completed' ? leaveDays : undefined,
+          status,
+          createdAt: '',
+        })
+        seq += 1
+      }
+
+      cursor = new Date(cursor.getTime() + cycleDays * msPerDay)
+    }
 
     return entries
   }
 
+  /** 聚合所有策略在某年的休假段（去重排序） */
+  static buildAllEntries(
+    policies: PersonnelLeavePolicy[],
+    year: number,
+    today: Date = new Date(),
+    lastEntryMap?: Map<string, string>,
+  ): PersonnelLeaveEntry[] {
+    const all: PersonnelLeaveEntry[] = []
+    for (const policy of policies) {
+      const anchor = lastEntryMap?.get(policy.personnelId)
+      const entries = PersonnelLeaveForm.computeLeaveEntriesForYear(
+        policy, year, today,
+        anchor,
+        !!anchor,
+      )
+      all.push(...entries)
+    }
+    return all.sort((a, b) => a.startDate.localeCompare(b.startDate))
+  }
+
+  // ── 向后兼容：保留 clone / 静态默认值 ──
+
+  /** @deprecated 使用 generatePolicies() 代替 */
+  static buildDefaultPolicies(): PersonnelLeavePolicy[] {
+    return PersonnelLeaveForm.generatePolicies(
+      Array.from({ length: 17 }, (_, i) => ({
+        id: `PER${String(i + 1).padStart(3, '0')}`,
+      })),
+    )
+  }
+
+  /** @deprecated 使用 generatePolicies() 生成，不再依赖此静态属性 */
+  static readonly DEFAULT_POLICIES: PersonnelLeavePolicy[] =
+    PersonnelLeaveForm.buildDefaultPolicies()
+
+  /** @deprecated 无对应后端，不再预置 */
+  static readonly DEFAULT_REVISIONS: PersonnelLeavePolicyRevision[] = []
+
+  /** @deprecated 使用 buildAllEntries() 代替 */
+  static buildDefaultEntries(): PersonnelLeaveEntry[] {
+    return PersonnelLeaveForm.buildAllEntries(
+      PersonnelLeaveForm.DEFAULT_POLICIES,
+      new Date().getFullYear(),
+    )
+  }
+
+  /** @deprecated 使用 buildAllEntries() 按需计算，不再依赖此静态属性 */
   static readonly DEFAULT_ENTRIES: PersonnelLeaveEntry[] =
     PersonnelLeaveForm.buildDefaultEntries()
 
@@ -511,17 +547,16 @@ export class PersonnelLeaveForm {
 
   static buildTeamGroups(
     personnelList: Array<{ id: string; name: string; team: string }>,
-    rows: LeaveTableRow[],
     teams: readonly { label: string; value: string }[] = [],
   ): TeamGroupItem[] {
     const personnelIds = personnelList.map((item) => item.id)
-    const activeIds = new Set(rows.map((row) => row.personnelId))
 
     return teams
       .map((team) => ({
         team: team.value,
         members: personnelList
-          .filter((item) => item.team === team.value && activeIds.has(item.id))
+          .filter((item) => item.team === team.value)
+          .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
           .map((item) => ({
             personnelId: item.id,
             name: item.name,

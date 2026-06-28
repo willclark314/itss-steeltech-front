@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
-import { getToken, getUser } from '@/utils/auth'
+import { getToken, getUser, isAdminUser } from '@/utils/auth'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -142,24 +142,20 @@ router.beforeEach((to) => {
   const token = getToken()
 
   if (to.meta.public) {
-    if (token && to.path === '/login' && !isDev) {
+    if (token && to.path === '/login') {
       return '/home'
     }
     return true
   }
 
   if (!token) {
-    return '/login'
+    if (to.path === '/login') return true
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
 
   // 仅管理员可访问的路由
-  if (to.meta.adminOnly) {
-    const user = getUser()
-    const isAdmin =
-      user?.loginType === 'dev' || user?.username === 'admin'
-    if (!isAdmin) {
-      return '/home'
-    }
+  if (to.meta.adminOnly && !isAdminUser(getUser())) {
+    return '/home'
   }
 
   return true

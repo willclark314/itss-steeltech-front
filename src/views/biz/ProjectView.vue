@@ -6,7 +6,6 @@ import { ElMessage, type FormInstance } from 'element-plus'
 import { createProject, fetchProjectList, updateProject } from '@/api/projects'
 import { fetchPersonnelList } from '@/api/personnel'
 import ProjectTable from '@/components/biz/ProjectTable.vue'
-import { usePaginatedList } from '@/composables/usePaginatedList'
 import { ProjectForm } from '@/models/biz/project'
 import { fetchSystemConfig } from '@/api/system'
 import { BusinessSystemConfig } from '@/models/biz'
@@ -49,21 +48,135 @@ const groupByOptions = ProjectForm.GROUP_BY_OPTIONS
 
 const personnelOptions = ref<PersonnelRecord[]>([])
 
-const {
-  items: filteredData,
-  total,
-  page,
-  pageSize,
-  loading,
-  loadPage,
-  loadAroundAnchor,
-  clearCache,
-  patchItem,
-} = usePaginatedList<ProjectRecord>({
-  pageSize: 20,
-  getItemKey: (item) => item.projectNo,
-  fetchPage: (params) => fetchProjectList(params),
-})
+// ── 分页列表 ──
+const pageSize = 20
+const filteredData = ref<ProjectRecord[]>([])
+const total = ref(0)
+const page = ref(1)
+const totalPages = ref(1)
+const loading = ref(false)
+
+type PaginatedFilters = { keyword?: string; status?: string }
+
+const listCache = new Map<
+  string,
+  { list: ProjectRecord[]; total: number; page: number; pageSize: number; totalPages: number }
+>()
+let listFilters: PaginatedFilters = {}
+
+function buildListCacheKey(pageNo: number, nextFilters = listFilters) {
+  return JSON.stringify({ ...nextFilters, page: pageNo, pageSize })
+}
+
+function applyListResult(result: {
+  list: ProjectRecord[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}) {
+  filteredData.value = result.list
+  total.value = result.total
+  page.value = result.page
+  totalPages.value = result.totalPages
+  listCache.set(buildListCacheKey(result.page), {
+    list: [...result.list],
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+    totalPages: result.totalPages,
+  })
+}
+
+async function loadPage(pageNo = 1, nextFilters?: PaginatedFilters, force = false) {
+  if (nextFilters) {
+    const filtersChanged = JSON.stringify(nextFilters) !== JSON.stringify(listFilters)
+    if (filtersChanged) {
+      clearCache()
+      listFilters = { ...nextFilters }
+    }
+  }
+
+  const cacheKey = buildListCacheKey(pageNo)
+  if (!force && listCache.has(cacheKey)) {
+    applyListResult(listCache.get(cacheKey)!)
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await fetchProjectList({
+      ...listFilters,
+      page: pageNo,
+      pageSize,
+    })
+    applyListResult(result)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters) {
+  if (nextFilters) {
+    listFilters = { ...nextFilters }
+  }
+
+  const cacheKey = `${JSON.stringify({ ...listFilters, pageSize })}::anchor::${anchor}`
+  if (listCache.has(cacheKey)) {
+    applyListResult(listCache.get(cacheKey)!)
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await fetchProjectList({
+      ...listFilters,
+      anchor,
+      pageSize,
+    })
+    listCache.set(cacheKey, {
+      list: [...result.list],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    })
+    listCache.set(buildListCacheKey(result.page), {
+      list: [...result.list],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    })
+    applyListResult(result)
+  } finally {
+    loading.value = false
+  }
+}
+
+function clearCache() {
+  listCache.clear()
+}
+
+function patchItem(key: string, updater: (item: ProjectRecord) => ProjectRecord) {
+  const currentIndex = filteredData.value.findIndex((item) => item.projectNo === key)
+  if (currentIndex !== -1) {
+    filteredData.value[currentIndex] = updater(filteredData.value[currentIndex]!)
+  }
+
+  for (const [cacheKey, cached] of listCache.entries()) {
+    const index = cached.list.findIndex((item) => item.projectNo === key)
+    if (index === -1) continue
+
+    const nextList = [...cached.list]
+    nextList[index] = updater(nextList[index]!)
+    listCache.set(cacheKey, {
+      ...cached,
+      list: nextList,
+    })
+  }
+}
+
 const editingAssignedPersonnel = ref<ProjectAssignee[]>([])
 const groupBy = ref<ProjectGroupBy>('')
 const groupData = ref<ProjectRecord[]>([])

@@ -11,7 +11,7 @@ import {
   finalizeMonthlyRest,
 } from '@/api/monthlyRest'
 import { PersonnelForm, MonthlyRestForm } from '@/models/personnel'
-import { getUser } from '@/utils/auth'
+import { getUser, isAdminUser } from '@/utils/auth'
 import type { PersonnelRecord, MonthlyRestRecord } from '@/models/personnel'
 
 const currentYear = ref(MonthlyRestForm.getCurrentYear())
@@ -37,10 +37,7 @@ const teamOptions = PersonnelForm.TEAM_OPTIONS
 // ── 当前用户权限 ──
 const currentUser = getUser()
 const currentTeam = currentUser?.profile?.team || ''
-const isAdmin =
-  currentUser?.loginType === 'dev' ||
-  currentUser?.username === 'admin' ||
-  currentUser?.roles?.includes('admin') === true
+const isAdmin = isAdminUser(currentUser)
 const scopeEditablePersonnelIds = ref<string[]>([])
 // 组长角色不启用，所有非管理员均为普通成员，只能编辑自己
 
@@ -405,11 +402,6 @@ function getRestCount(personnelId: string): number {
   return (restMap[personnelId] ?? []).length
 }
 
-/** 获取所有休息日总数 */
-const totalRestCount = computed(() =>
-  tableRows.value.reduce((sum, row) => sum + getRestCount(row.personnelId), 0),
-)
-
 /** 值班警告：每个组每个周末日至少有一人不休息（值班） */
 interface DutyWarning {
   team: string
@@ -462,6 +454,9 @@ const dutyWarningsByTeam = computed(() => {
 
 /** 月份标签 */
 const monthLabel = computed(() => `${currentYear.value}年${currentMonth.value}月`)
+
+/** 休息天数列宽（用数字绑定，避免 EP 把字符串 width 当弹性列处理） */
+const REST_COUNT_COL_WIDTH = 50
 
 /** 根据当月天数动态计算列宽 */
 const columnWidth = computed(() => {
@@ -521,9 +516,6 @@ onMounted(() => {
       </div>
 
       <div class="toolbar-right">
-        <span class="rest-summary">
-          共 <strong>{{ totalRestCount }}</strong> 人次休息
-        </span>
         <el-button
           v-if="isAdmin"
           :loading="exporting"
@@ -551,6 +543,7 @@ onMounted(() => {
         stripe
         size="small"
         height="100%"
+        :fit="false"
         class="rest-table"
       >
         <!-- 固定列：序号 -->
@@ -558,7 +551,7 @@ onMounted(() => {
           fixed="left"
           type="index"
           label="序号"
-          width="55"
+          width="30"
           align="center"
         />
 
@@ -567,7 +560,7 @@ onMounted(() => {
           fixed="left"
           prop="name"
           label="姓名"
-          width="100"
+          width="80"
         />
 
         <!-- 固定列：班组 -->
@@ -575,23 +568,27 @@ onMounted(() => {
           fixed="left"
           prop="team"
           label="班组"
-          width="80"
+          width="55"
+          align="center"
         />
 
         <!-- 固定列：休息日数 -->
         <el-table-column
           fixed="left"
-          label="休息天数"
-          width="80"
+          class-name="rest-count-col"
+          :width="REST_COUNT_COL_WIDTH"
           align="center"
         >
+          <template #header>
+            <span class="rest-count-header">休息<br>天数</span>
+          </template>
           <template #default="{ row }">
-            <el-tag
-              :type="getRestCount(row.personnelId) > 0 ? 'success' : 'info'"
-              size="small"
+            <span
+              class="rest-count"
+              :class="{ 'is-active': getRestCount(row.personnelId) > 0 }"
             >
               {{ getRestCount(row.personnelId) }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
 
@@ -635,7 +632,7 @@ onMounted(() => {
         <el-table-column
           fixed="right"
           label="操作"
-          width="100"
+          width="80"
           align="center"
         >
           <template #default="{ row }">
@@ -733,11 +730,6 @@ onMounted(() => {
   margin-left: auto;
 }
 
-.rest-summary {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-
 .table-hint {
   display: flex;
   align-items: center;
@@ -766,6 +758,11 @@ onMounted(() => {
   padding: 2px 2px;
 }
 
+.rest-table :deep(.el-table__header th .cell) {
+  padding: 1px 2px;
+  line-height: 1.2;
+}
+
 .rest-table :deep(.el-table__body td) {
   padding: 0;
 }
@@ -773,6 +770,38 @@ onMounted(() => {
 .rest-table :deep(.el-table__body td .cell) {
   padding: 1px 2px;
   line-height: 1;
+}
+
+.rest-table :deep(.rest-count-col.el-table__cell) {
+  width: v-bind('`${REST_COUNT_COL_WIDTH}px`') !important;
+  min-width: v-bind('`${REST_COUNT_COL_WIDTH}px`') !important;
+  max-width: v-bind('`${REST_COUNT_COL_WIDTH}px`') !important;
+}
+
+.rest-count-header {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.rest-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color);
+}
+
+.rest-count.is-active {
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-8);
 }
 
 .day-header {

@@ -13,7 +13,6 @@ import {
   updateContact,
 } from '@/api/contacts'
 import { checkProjectNos, createProject } from '@/api/projects'
-import { usePaginatedList } from '@/composables/usePaginatedList'
 import { ContactForm } from '@/models/biz/contact'
 import type { ContactAttachment, ContactRecord, ContactStatus, ProjectLink } from '@/models/biz/contact'
 import { ProjectForm } from '@/models/biz/project'
@@ -57,21 +56,134 @@ const projectSourceMap = ContactForm.PROJECT_SOURCE_MAP
 const knownProjectNos = ref(new Set<string>())
 const appendSearchResults = ref<ContactRecord[]>([])
 
-const {
-  items: filteredData,
-  total,
-  page,
-  pageSize,
-  loading,
-  loadPage,
-  loadAroundAnchor,
-  clearCache,
-  patchItem,
-} = usePaginatedList<ContactRecord>({
-  pageSize: 20,
-  getItemKey: (item) => item.id,
-  fetchPage: (params) => fetchContactList(params),
-})
+// ── 分页列表 ──
+const pageSize = 20
+const filteredData = ref<ContactRecord[]>([])
+const total = ref(0)
+const page = ref(1)
+const totalPages = ref(1)
+const loading = ref(false)
+
+type PaginatedFilters = { keyword?: string; status?: string }
+
+const listCache = new Map<
+  string,
+  { list: ContactRecord[]; total: number; page: number; pageSize: number; totalPages: number }
+>()
+let listFilters: PaginatedFilters = {}
+
+function buildListCacheKey(pageNo: number, nextFilters = listFilters) {
+  return JSON.stringify({ ...nextFilters, page: pageNo, pageSize })
+}
+
+function applyListResult(result: {
+  list: ContactRecord[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}) {
+  filteredData.value = result.list
+  total.value = result.total
+  page.value = result.page
+  totalPages.value = result.totalPages
+  listCache.set(buildListCacheKey(result.page), {
+    list: [...result.list],
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+    totalPages: result.totalPages,
+  })
+}
+
+async function loadPage(pageNo = 1, nextFilters?: PaginatedFilters, force = false) {
+  if (nextFilters) {
+    const filtersChanged = JSON.stringify(nextFilters) !== JSON.stringify(listFilters)
+    if (filtersChanged) {
+      clearCache()
+      listFilters = { ...nextFilters }
+    }
+  }
+
+  const cacheKey = buildListCacheKey(pageNo)
+  if (!force && listCache.has(cacheKey)) {
+    applyListResult(listCache.get(cacheKey)!)
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await fetchContactList({
+      ...listFilters,
+      page: pageNo,
+      pageSize,
+    })
+    applyListResult(result)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters) {
+  if (nextFilters) {
+    listFilters = { ...nextFilters }
+  }
+
+  const cacheKey = `${JSON.stringify({ ...listFilters, pageSize })}::anchor::${anchor}`
+  if (listCache.has(cacheKey)) {
+    applyListResult(listCache.get(cacheKey)!)
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await fetchContactList({
+      ...listFilters,
+      anchor,
+      pageSize,
+    })
+    listCache.set(cacheKey, {
+      list: [...result.list],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    })
+    listCache.set(buildListCacheKey(result.page), {
+      list: [...result.list],
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
+    })
+    applyListResult(result)
+  } finally {
+    loading.value = false
+  }
+}
+
+function clearCache() {
+  listCache.clear()
+}
+
+function patchItem(key: string, updater: (item: ContactRecord) => ContactRecord) {
+  const currentIndex = filteredData.value.findIndex((item) => item.id === key)
+  if (currentIndex !== -1) {
+    filteredData.value[currentIndex] = updater(filteredData.value[currentIndex]!)
+  }
+
+  for (const [cacheKey, cached] of listCache.entries()) {
+    const index = cached.list.findIndex((item) => item.id === key)
+    if (index === -1) continue
+
+    const nextList = [...cached.list]
+    nextList[index] = updater(nextList[index]!)
+    listCache.set(cacheKey, {
+      ...cached,
+      list: nextList,
+    })
+  }
+}
 
 const formRef = ref<FormInstance>()
 const form = reactive(ContactForm.createEmptyForm())

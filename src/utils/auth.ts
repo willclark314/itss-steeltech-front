@@ -36,14 +36,7 @@ export function getUser(): User | null {
 
 export function getUsername(): string {
   const user = getUser()
-  if (user?.username) return user.username
-
-  const token = getToken()
-  if (token?.startsWith('mock-token-')) {
-    return token.slice('mock-token-'.length)
-  }
-
-  return ''
+  return user?.username ?? ''
 }
 
 export function getDisplayName(): string {
@@ -62,4 +55,12 @@ export function removeToken(): void {
 
 export function isLoggedIn(): boolean {
   return !!getToken()
+}
+
+export function isAdminUser(user: User | null = getUser()): boolean {
+  if (!user) return false
+  return (
+    (user.loginType === 'dev' && user.username === 'admin') ||
+    user.roles?.includes('admin') === true
+  )
 }

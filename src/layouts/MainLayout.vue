@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import UserMenu from '@/components/UserMenu.vue'
 import LayoutTabs from '@/components/LayoutTabs.vue'
-import { getUser } from '@/utils/auth'
+import { getUser, isAdminUser } from '@/utils/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,9 +25,7 @@ interface MenuItem {
 const isDev = import.meta.env.DEV
 
 // ── 当前用户权限 ──
-const currentUser = getUser()
-const isAdminUser =
-  currentUser?.loginType === 'dev' || currentUser?.username === 'admin'
+const isAdminUserFlag = isAdminUser(getUser())
 
 const systems = computed(() => {
   const list: { id: SystemId; name: string }[] = [
@@ -35,7 +33,7 @@ const systems = computed(() => {
     { id: 'personnel', name: '人员系统' },
   ]
   // 仅管理员可见：业务系统、系统设置、开发
-  if (isAdminUser) {
+  if (isAdminUserFlag) {
     list.splice(1, 0, { id: 'business', name: '业务系统' })
     list.push({ id: 'system', name: '系统设置' })
     if (isDev) {
@@ -66,7 +64,7 @@ const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
     { path: '/business/project', title: '项目', icon: 'Briefcase' },
     { path: '/business/schedule', title: '工作安排', icon: 'Calendar' },
   ],
-  personnel: isAdminUser
+  personnel: isAdminUserFlag
     ? [
         { path: '/personnel/person', title: '人员', icon: 'Avatar' },
         { path: '/personnel/role', title: '角色', icon: 'Key' },
