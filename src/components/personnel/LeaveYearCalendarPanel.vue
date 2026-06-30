@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, toRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Coin, DeleteFilled, Edit } from '@element-plus/icons-vue'
+import { DeleteFilled, Edit } from '@element-plus/icons-vue'
 import { PersonnelLeaveForm } from '@/models/personnel'
 import type { CalendarDayCell, CalendarMonth, LeaveEntryType } from '@/models/personnel'
-import { saveLeaveEntry, deleteLeaveEntry, type LeaveEntryDTO } from '@/api/leave'
+import { deleteLeaveEntry, type LeaveEntryDTO } from '@/api/leave'
 
 const props = withDefaults(
   defineProps<{
@@ -69,30 +69,6 @@ function isActualEntry(event: CalendarDayCell['events'][number]) {
 
 function resolveEntryId(event: CalendarDayCell['events'][number]) {
   return props.dtoLookup.get(event.id)?.id ?? event.id
-}
-
-async function handleDaySave(event: CalendarDayCell['events'][number]) {
-  try {
-    const dto = props.dtoLookup.get(event.id)
-    const payload: Partial<LeaveEntryDTO> = {
-      id: dto?.id,
-      personnelId: event.personnelId,
-      type: event.type as LeaveEntryDTO['type'],
-      startDate: event.startDate,
-      endDate: event.endDate,
-      plannedDays: dto?.plannedDays ?? 0,
-      status: (dto?.status ?? event.status) as LeaveEntryDTO['status'],
-      reason: event.reason || dto?.reason || '',
-      remark: dto?.remark || '',
-      computed: dto?.computed ?? true,
-    }
-    await saveLeaveEntry(payload)
-    ElMessage.success('休假记录已保存')
-    closeDayContextMenu()
-    emit('loadCalendar')
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '保存失败')
-  }
 }
 
 function handleDayEdit(event: CalendarDayCell['events'][number]) {
@@ -337,10 +313,10 @@ function getEventColor(event: CalendarDayCell['events'][number]) {
               v-if="!isActualEntry(event)"
               type="button"
               class="ctx-menu-item"
-              @click="handleDaySave(event)"
+              @click="handleDayEdit(event)"
             >
-              <el-icon><Coin /></el-icon>
-              保存
+              <el-icon><Edit /></el-icon>
+              修改并保存
             </button>
             <button
               v-if="isActualEntry(event)"

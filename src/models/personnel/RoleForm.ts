@@ -110,6 +110,13 @@ export class RoleForm {
       actions: ['view', 'edit'],
     },
     {
+      pageKey: 'guide',
+      pageName: '说明',
+      module: '门户',
+      path: '/portal/guide',
+      actions: ['view', 'edit'],
+    },
+    {
       pageKey: 'contact',
       pageName: '联系单',
       module: '业务系统',
@@ -146,14 +153,14 @@ export class RoleForm {
     },
     {
       pageKey: 'leave',
-      pageName: '休假',
+      pageName: '年休',
       module: '人员系统',
       path: '/personnel/leave',
       actions: ['view', 'edit'],
     },
     {
       pageKey: 'monthly-rest',
-      pageName: '月休计划',
+      pageName: '月休',
       module: '人员系统',
       path: '/personnel/monthly-rest',
       actions: ['view', 'edit'],

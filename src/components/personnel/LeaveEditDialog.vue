@@ -55,6 +55,15 @@ const isCreateMode = computed(() => !props.entry && !!props.person)
 
 const simplifyForm = computed(() => props.memberMode === true && isCreateMode.value)
 
+/** 推算/未入库记录：可编辑保存，但不可删除 */
+const isComputedEntry = computed(() => props.entry?.computed === true)
+
+const saveButtonLabel = computed(() => {
+  if (isCreateMode.value) return '提交请假'
+  if (isComputedEntry.value) return '修改并保存'
+  return '保存'
+})
+
 function resetCreateForm() {
   form.type = 'request'
   form.startDate = ''
@@ -116,7 +125,9 @@ async function handleSave() {
   saving.value = true
   try {
     const result = await saveLeaveEntry(payload)
-    ElMessage.success(isCreateMode.value ? '请假已提交' : '休假记录已保存')
+    ElMessage.success(
+      isCreateMode.value ? '请假已提交' : isComputedEntry.value ? '休假记录已修改并保存' : '休假记录已保存',
+    )
     emit('saved', result)
     emit('update:visible', false)
   } catch (error) {
@@ -278,7 +289,7 @@ function handleClose() {
         <div class="footer-right">
           <el-button @click="handleClose">取消</el-button>
           <el-button type="primary" :loading="saving" @click="handleSave">
-            {{ isCreateMode ? '提交请假' : '保存' }}
+            {{ saveButtonLabel }}
           </el-button>
         </div>
       </div>

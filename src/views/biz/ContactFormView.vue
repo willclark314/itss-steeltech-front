@@ -188,7 +188,7 @@ function patchItem(key: string, updater: (item: ContactRecord) => ContactRecord)
 const formRef = ref<FormInstance>()
 const form = reactive(ContactForm.createEmptyForm())
 
-const formRules = ContactForm.FORM_RULES
+const formRules = computed(() => (editingId.value ? ContactForm.EDIT_FORM_RULES : ContactForm.FORM_RULES))
 
 const appendTargetOptions = computed(() => appendSearchResults.value)
 
@@ -747,7 +747,9 @@ async function handleSubmit() {
 
   try {
     if (editingId.value) {
-      const updated = await updateContact(editingId.value, {
+      const oldId = editingId.value
+      const updated = await updateContact(oldId, {
+        id: form.id?.trim() ?? '',
         title: form.title,
         receivedDate: form.receivedDate,
         urgency: form.urgency,
@@ -755,12 +757,21 @@ async function handleSubmit() {
         expectReplyDate: form.expectReplyDate,
         projectNos: [...form.projectNos],
       })
-      patchItem(editingId.value, () => updated)
+      if (oldId !== updated.id) {
+        clearCache()
+        if (highlightedContactId.value === oldId) {
+          highlightedContactId.value = updated.id
+        }
+        await loadPage(page.value, listFilters, true)
+      } else {
+        patchItem(oldId, () => updated)
+      }
       ElMessage.success('联系单已更新')
     } else {
       const primaryFiles = await ContactForm.uploadFilesFromList(form.primaryPdfList)
       const supplementFiles = await ContactForm.uploadFilesFromList(form.attachmentList)
       await createContact({
+        id: form.id?.trim() || undefined,
         title: form.title,
         receivedDate: form.receivedDate,
         urgency: form.urgency,
@@ -1086,7 +1097,7 @@ function openAppendChildDialog(row: ContactRecord) {
             link
             @click="openAppendChildDialog(toContactRecord(row))"
           >
-            追加联系单
+            追加
           </el-button>
           <el-button
             v-if="canCancelRow(row)"
@@ -1190,6 +1201,9 @@ function openAppendChildDialog(row: ContactRecord) {
     @closed="handleDialogClose"
   >
     <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
+      <el-form-item label="联系单号" prop="id">
+        <el-input v-model="form.id" placeholder="请输入联系单号" />
+      </el-form-item>
       <el-form-item label="联系主题" prop="title">
         <el-input v-model="form.title" placeholder="请输入联系主题" />
       </el-form-item>

@@ -40,6 +40,7 @@ export interface ContactRecord {
 }
 
 export interface ContactFormData {
+  id?: string
   title: string
   projectNos: string[]
   receivedDate: string
@@ -135,6 +136,13 @@ export class ContactForm {
     content: [{ required: true, message: '请输入联系内容', trigger: 'blur' }],
   }
 
+  static readonly EDIT_FORM_RULES: FormRules = {
+    id: [{ required: true, message: '请输入联系单号', trigger: 'blur' }],
+    title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
+    receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
+    content: [{ required: true, message: '请输入联系内容', trigger: 'blur' }],
+  }
+
   readonly record: ContactRecord
 
   constructor(record: ContactRecord) {
@@ -218,6 +226,7 @@ export class ContactForm {
 
   static createEmptyForm(): ContactFormData {
     return {
+      id: '',
       title: '',
       projectNos: [],
       receivedDate: ContactForm.formatDate(),
@@ -246,6 +255,7 @@ export class ContactForm {
 
   static createFormFromRecord(record: ContactRecord): ContactFormData {
     return {
+      id: record.id,
       title: record.title,
       projectNos: [...(record.projectNos || [])],
       receivedDate: record.receivedDate,
@@ -258,10 +268,26 @@ export class ContactForm {
   }
 
   static sortForDisplay(records: ContactRecord[]) {
+    const rootDateMap = new Map<string, string>()
+    for (const record of records) {
+      if (!record.rootId || record.rootId === record.id) {
+        rootDateMap.set(record.id, record.receivedDate)
+      }
+    }
+    for (const record of records) {
+      const rootId = record.rootId || record.id
+      if (!rootDateMap.has(rootId)) {
+        rootDateMap.set(rootId, record.receivedDate)
+      }
+    }
+
     return [...records].sort((a, b) => {
       const rootA = a.rootId || a.id
       const rootB = b.rootId || b.id
-      if (rootA !== rootB) return rootB.localeCompare(rootA)
+      const dateA = rootDateMap.get(rootA) ?? a.receivedDate
+      const dateB = rootDateMap.get(rootB) ?? b.receivedDate
+      if (dateA !== dateB) return dateB.localeCompare(dateA)
+      if (rootA !== rootB) return rootA.localeCompare(rootB)
       return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
     })
   }

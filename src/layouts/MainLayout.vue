@@ -58,6 +58,7 @@ const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
   production: [
     { path: '/home', title: '首页', icon: 'House' },
     { path: '/portal/about', title: '关于', icon: 'InfoFilled' },
+    { path: '/portal/guide', title: '说明', icon: 'QuestionFilled' },
   ],
   business: [
     { path: '/business/contact', title: '联系单', icon: 'Message' },
@@ -68,12 +69,12 @@ const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
     ? [
         { path: '/personnel/person', title: '人员', icon: 'Avatar' },
         { path: '/personnel/role', title: '角色', icon: 'Key' },
-        { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
-        { path: '/personnel/monthly-rest', title: '月休计划', icon: 'Document' },
+        { path: '/personnel/leave', title: '年休', icon: 'Calendar' },
+        { path: '/personnel/monthly-rest', title: '月休', icon: 'Document' },
       ]
     : [
-        { path: '/personnel/leave', title: '休假', icon: 'Calendar' },
-        { path: '/personnel/monthly-rest', title: '月休计划', icon: 'Document' },
+        { path: '/personnel/leave', title: '年休', icon: 'Calendar' },
+        { path: '/personnel/monthly-rest', title: '月休', icon: 'Document' },
       ],
   system: [
     { path: '/system/settings', title: '全局配置', icon: 'Setting' },

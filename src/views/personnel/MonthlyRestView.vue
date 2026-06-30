@@ -518,6 +518,7 @@ onMounted(() => {
       <div class="toolbar-right">
         <el-button
           v-if="isAdmin"
+          size="small"
           :loading="exporting"
           @click="handleExport"
         >
@@ -526,6 +527,7 @@ onMounted(() => {
         <el-button
           v-if="isAdmin"
           type="primary"
+          size="small"
           :loading="saving"
           :disabled="tableRows.length === 0"
           @click="handleSave"

@@ -28,6 +28,7 @@ const systemModules = computed<SystemModule[]>(() => {
       links: [
         { path: '/home', title: '首页', description: '系统概览与功能导航' },
         { path: '/portal/about', title: '关于', description: '了解系统概况与使用说明' },
+        { path: '/portal/guide', title: '说明', description: '年休与月休页面的操作说明与使用指南' },
       ],
     },
   ]
@@ -52,12 +53,12 @@ const systemModules = computed<SystemModule[]>(() => {
       ? [
           { path: '/personnel/person', title: '人员', description: '人员档案查询、详情编辑及按班组/国籍/宿舍分组' },
           { path: '/personnel/role', title: '角色', description: '角色管理、关联人员与页面访问权限配置' },
-          { path: '/personnel/leave', title: '休假', description: '全年休假日历、班组筛选与休假记录查看' },
-          { path: '/personnel/monthly-rest', title: '月休计划', description: '每月周末休息排班，点击方格切换休息日' },
+          { path: '/personnel/leave', title: '年休', description: '全年休假日历、班组筛选与休假记录查看' },
+          { path: '/personnel/monthly-rest', title: '月休', description: '每月周末休息排班，点击方格切换休息日' },
         ]
       : [
-          { path: '/personnel/leave', title: '休假', description: '全年休假日历、班组筛选与休假记录查看' },
-          { path: '/personnel/monthly-rest', title: '月休计划', description: '每月周末休息排班，点击方格切换休息日' },
+          { path: '/personnel/leave', title: '年休', description: '全年休假日历、班组筛选与休假记录查看' },
+          { path: '/personnel/monthly-rest', title: '月休', description: '每月周末休息排班，点击方格切换休息日' },
         ],
   })
 

@@ -25,6 +25,7 @@ export interface ContactListResult {
 }
 
 export interface CreateContactPayload {
+  id?: string
   title: string
   receivedDate: string
   urgency?: string
@@ -36,6 +37,7 @@ export interface CreateContactPayload {
 }
 
 export interface UpdateContactPayload {
+  id?: string
   title?: string
   receivedDate?: string
   urgency?: string

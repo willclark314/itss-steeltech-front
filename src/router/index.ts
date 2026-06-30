@@ -26,6 +26,12 @@ const mainChildren: RouteRecordRaw[] = [
     meta: { title: '关于' },
   },
   {
+    path: 'portal/guide',
+    name: 'PortalGuide',
+    component: () => import('@/views/portal/GuideView.vue'),
+    meta: { title: '说明' },
+  },
+  {
     path: 'business/contact',
     name: 'ContactForm',
     component: () => import('@/views/biz/ContactFormView.vue'),
@@ -53,13 +59,13 @@ const mainChildren: RouteRecordRaw[] = [
     path: 'personnel/leave',
     name: 'PersonnelLeave',
     component: () => import('@/views/personnel/LeaveView.vue'),
-    meta: { title: '休假' },
+    meta: { title: '年休' },
   },
   {
     path: 'personnel/monthly-rest',
     name: 'PersonnelMonthlyRest',
     component: () => import('@/views/personnel/MonthlyRestView.vue'),
-    meta: { title: '月休计划' },
+    meta: { title: '月休' },
   },
   {
     path: 'personnel/role',

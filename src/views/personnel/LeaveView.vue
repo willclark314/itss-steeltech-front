@@ -132,20 +132,13 @@ function buildRequestEntryIds(data: LeaveCalendarResponse | null): Set<string> {
   return requestIds
 }
 
-/** 最早入库休假开始日：API 锚点 + 本地 actualEntries 兜底 */
-function buildEarliestStartMap(data: LeaveCalendarResponse): Map<string, string> {
+/** 结束日期最晚的已保存休假结束日（不受查看年份限制），用于从实际记录推算下一次休假 */
+function buildLastEndMap(data: LeaveCalendarResponse): Map<string, string> {
   const map = new Map<string, string>()
   for (const person of data.personnel) {
-    const anchor = data.earliestLeaveAnchors?.[person.id]
-    if (anchor?.startDate) {
-      map.set(person.id, anchor.startDate)
-    }
-  }
-  for (const dto of data.actualEntries) {
-    if (dto.status === 'cancelled') continue
-    const prev = map.get(dto.personnelId)
-    if (!prev || dto.startDate < prev) {
-      map.set(dto.personnelId, dto.startDate)
+    const anchor = data.lastLeaveAnchors?.[person.id]
+    if (anchor?.endDate) {
+      map.set(person.id, anchor.endDate)
     }
   }
   return map
@@ -184,14 +177,14 @@ function resolveComputedDisplayEntries(
   const today = data.today || new Date().toISOString().slice(0, 10)
   const todayDate = new Date(`${today}T12:00:00`)
   const policies = resolveCalendarPolicies(data)
-  const earliestStartMap = buildEarliestStartMap(data)
+  const lastEndMap = buildLastEndMap(data)
 
   const computedInYear = pickComputedLeavesInYear(
-    PersonnelLeaveForm.buildMemberLeaveEntries(
+    PersonnelLeaveForm.buildAllEntries(
       policies,
       displayYear,
       todayDate,
-      earliestStartMap,
+      lastEndMap,
     ).map(leaveEntryToDisplayEntry),
     displayYear,
   )
@@ -369,7 +362,7 @@ function calendarPolicyToFormPolicy(
 }
 
 function leaveEntryToDisplayEntry(
-  entry: ReturnType<typeof PersonnelLeaveForm.buildMemberLeaveEntries>[number],
+  entry: ReturnType<typeof PersonnelLeaveForm.buildAllEntries>[number],
 ): LeaveDisplayEntry {
   return {
     id: entry.id,
@@ -1193,7 +1186,7 @@ onBeforeUnmount(() => {
             :max="365"
             style="width: 100%"
           />
-          <div class="field-hint">连续工作多少天后休假</div>
+          <div class="field-hint">连续工作多少天后休假（填135或150）</div>
         </el-form-item>
         <el-form-item label="休假天数（时长）">
           <el-input-number
@@ -1202,7 +1195,7 @@ onBeforeUnmount(() => {
             :max="90"
             style="width: 100%"
           />
-          <div class="field-hint">每次休假持续多少天</div>
+          <div class="field-hint">每次休假持续多少天（默认19天，园区出发和到达）</div>
         </el-form-item>
         <el-form-item label="周期起始日期">
           <el-date-picker
@@ -1212,7 +1205,7 @@ onBeforeUnmount(() => {
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
-          <div class="field-hint">无实际休假记录时，以此为锚点推算（有新记录后自动前移）</div>
+          <div class="field-hint">默认 2020 年 1 月 1 日，无需修改；保存实际休假后会自动调整</div>
         </el-form-item>
       </el-form>
       <template #footer>

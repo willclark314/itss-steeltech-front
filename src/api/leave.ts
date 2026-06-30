@@ -25,7 +25,7 @@ export interface LeaveCalendarResponse {
   }>
   actualEntries: LeaveEntryDTO[]
   computedEntries: LeaveEntryDTO[]
-  /** 每人全局最晚一条轮休记录（不受查看年份限制） */
+  /** 每人结束日期最晚的已保存休假（不受查看年份限制），用于推算下一次休假 */
   lastLeaveAnchors?: Record<string, { startDate: string; endDate: string }>
   /** 每人全局最早一条轮休记录（不受查看年份限制） */
   earliestLeaveAnchors?: Record<string, { startDate: string; endDate: string }>
