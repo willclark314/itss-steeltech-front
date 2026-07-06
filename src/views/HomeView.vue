@@ -27,24 +27,55 @@ const systemModules = computed<SystemModule[]>(() => {
       summary: '系统入口与基础信息，便于快速了解平台概况。',
       links: [
         { path: '/home', title: '首页', description: '系统概览与功能导航' },
+        { path: '/portal/my', title: '我的', description: '查看分配给自己的项目及关联联系单' },
         { path: '/portal/about', title: '关于', description: '了解系统概况与使用说明' },
         { path: '/portal/guide', title: '说明', description: '年休与月休页面的操作说明与使用指南' },
       ],
     },
-  ]
-
-  // 仅管理员可见：业务系统
-  if (isAdminUserFlag) {
-    modules.push({
+    {
       name: '业务系统',
-      summary: '支撑日常业务协同，管理项目与工程联系单。',
-      links: [
-        { path: '/business/contact', title: '联系单', description: '联系单录入、查询、附件管理与状态跟踪' },
-        { path: '/business/project', title: '项目', description: '项目信息维护、检索及与联系单关联查看' },
-        { path: '/business/schedule', title: '工作安排', description: '按年度计划开始与结束时间查看项目日历安排' },
-      ],
-    })
-  }
+      summary: isAdminUserFlag
+        ? '支撑日常业务协同，管理项目与工程联系单。'
+        : '查询工程联系单与项目信息，按状态或人员分组查看。',
+      links: isAdminUserFlag
+        ? [
+            {
+              path: '/business/contact-browse',
+              title: '联系单',
+              description: '查询工程联系单，按状态或紧急程度分组查看',
+            },
+            {
+              path: '/business/contact',
+              title: '联系单管理',
+              description: '联系单录入、查询、附件管理与状态跟踪',
+            },
+            {
+              path: '/business/project-browse',
+              title: '项目',
+              description: '查询项目信息，按流程状态或分配人员分组查看',
+            },
+            { path: '/business/project', title: '项目管理', description: '项目信息维护、检索及与联系单关联查看' },
+            { path: '/business/schedule', title: '工作安排', description: '按年度计划开始与结束时间查看项目日历安排' },
+            {
+              path: '/business/detail-team-schedule',
+              title: '细化组排班',
+              description: '查看未完成细化项目，管理细化组人员项目分配',
+            },
+          ]
+        : [
+            {
+              path: '/business/contact-browse',
+              title: '联系单',
+              description: '查询工程联系单，按状态或紧急程度分组查看',
+            },
+            {
+              path: '/business/project-browse',
+              title: '项目',
+              description: '查询项目信息，按流程状态或分配人员分组查看',
+            },
+          ],
+    },
+  ]
 
   modules.push({
     name: '人员系统',

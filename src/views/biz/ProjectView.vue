@@ -2,11 +2,13 @@
 import '@/styles/biz-page-card.css'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, type FormInstance } from 'element-plus'
-import { createProject, fetchProjectList, updateProject } from '@/api/projects'
+import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
+import { createProject, deleteProject, fetchProjectList, updateProject } from '@/api/projects'
 import { fetchPersonnelList } from '@/api/personnel'
 import ProjectTable from '@/components/biz/ProjectTable.vue'
-import { ProjectForm } from '@/models/biz/project'
+import ProjectDetailWorkflowPanel from '@/components/biz/ProjectDetailWorkflowPanel.vue'
+import TagSelect from '@/components/biz/TagSelect.vue'
+import { DetailWorkflowForm, ProjectForm } from '@/models/biz/project'
 import { fetchSystemConfig } from '@/api/system'
 import { BusinessSystemConfig } from '@/models/biz'
 import type { LocalWorkPathConfig } from '@/models/biz'
@@ -17,6 +19,7 @@ import type {
   ProjectRecord,
 } from '@/models/biz/project'
 import { BIZ_ROUTES } from '@/models/biz/navigation'
+import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +27,7 @@ const submitting = ref(false)
 const projectTableRef = ref<InstanceType<typeof ProjectTable>>()
 const highlightedProjectNo = ref('')
 const editingProjectNo = ref<string | null>(null)
+const editingRecord = ref<ProjectRecord | null>(null)
 const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive(ProjectForm.createEmptyForm())
@@ -32,13 +36,17 @@ const dialogTitle = computed(() => (editingProjectNo.value ? '编辑项目' : '�
 const localWorkPathConfig = ref<LocalWorkPathConfig>({
   ...BusinessSystemConfig.LOCAL_WORK_PATH,
 })
-const localWorkPathPreview = computed(() =>
-  ProjectForm.buildLocalWorkPathFull(form.localWorkPath, localWorkPathConfig.value),
+const designWorkPathPreview = computed(() =>
+  ProjectForm.buildLocalWorkPathFull(form.designWorkPath, localWorkPathConfig.value),
+)
+const detailWorkPathPreview = computed(() =>
+  ProjectForm.buildLocalWorkPathFull(form.detailWorkPath, localWorkPathConfig.value),
 )
 
 const searchForm = reactive({
   keyword: '',
   status: '',
+  tags: [] as string[],
 })
 
 const statusOptions = ProjectForm.STATUS_OPTIONS
@@ -48,144 +56,189 @@ const groupByOptions = ProjectForm.GROUP_BY_OPTIONS
 
 const personnelOptions = ref<PersonnelRecord[]>([])
 
-// ── 分页列表 ──
+// ── 分页列表（按筛选条件分桶缓存，切换筛选/分组时保留已查数据）──
 const pageSize = 20
-const filteredData = ref<ProjectRecord[]>([])
-const total = ref(0)
-const page = ref(1)
-const totalPages = ref(1)
-const loading = ref(false)
+const {
+  filteredData,
+  total,
+  page,
+  loading,
+  loadPage: loadCachedPage,
+  loadAll: loadCachedAll,
+  loadAroundAnchor: loadCachedAroundAnchor,
+  clearFilterCache,
+  patchItem,
+  getAllList,
+  getFilters,
+  cacheRevision,
+} = usePaginatedListCache<ProjectRecord>({
+  pageSize,
+  getItemKey: (item) => item.projectNo,
+  sortList: ProjectForm.sortForDisplay,
+})
 
-type PaginatedFilters = { keyword?: string; status?: string }
+type PaginatedFilters = { keyword?: string; status?: string; tags?: string[] }
 
-const listCache = new Map<
-  string,
-  { list: ProjectRecord[]; total: number; page: number; pageSize: number; totalPages: number }
->()
-let listFilters: PaginatedFilters = {}
-
-function buildListCacheKey(pageNo: number, nextFilters = listFilters) {
-  return JSON.stringify({ ...nextFilters, page: pageNo, pageSize })
-}
-
-function applyListResult(result: {
-  list: ProjectRecord[]
-  total: number
-  page: number
-  pageSize: number
-  totalPages: number
-}) {
-  filteredData.value = result.list
-  total.value = result.total
-  page.value = result.page
-  totalPages.value = result.totalPages
-  listCache.set(buildListCacheKey(result.page), {
-    list: [...result.list],
-    total: result.total,
-    page: result.page,
-    pageSize: result.pageSize,
-    totalPages: result.totalPages,
-  })
+function buildListQuery(params: PaginatedFilters & { page?: number; pageSize?: number; anchor?: string; all?: boolean }) {
+  return {
+    keyword: params.keyword,
+    status: params.status,
+    tags: params.tags,
+    page: params.page,
+    pageSize: params.pageSize,
+    anchor: params.anchor,
+    all: params.all,
+  }
 }
 
 async function loadPage(pageNo = 1, nextFilters?: PaginatedFilters, force = false) {
-  if (nextFilters) {
-    const filtersChanged = JSON.stringify(nextFilters) !== JSON.stringify(listFilters)
-    if (filtersChanged) {
-      clearCache()
-      listFilters = { ...nextFilters }
-    }
-  }
+  return loadCachedPage(
+    (params) => fetchProjectList(buildListQuery(params)),
+    pageNo,
+    nextFilters,
+    force,
+  )
+}
 
-  const cacheKey = buildListCacheKey(pageNo)
-  if (!force && listCache.has(cacheKey)) {
-    applyListResult(listCache.get(cacheKey)!)
+async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters, force = false) {
+  return loadCachedAroundAnchor(
+    (params) => fetchProjectList(buildListQuery(params)),
+    anchor,
+    nextFilters,
+    force,
+  )
+}
+
+function buildViewFilters(): PaginatedFilters {
+  return {
+    keyword: searchForm.keyword,
+    status: searchForm.status,
+    tags: searchForm.tags.length ? [...searchForm.tags] : undefined,
+  }
+}
+
+async function loadAllForGrouped(nextFilters?: PaginatedFilters, force = false) {
+  return loadCachedAll(
+    (params) => fetchProjectList(buildListQuery({ ...params, all: true })),
+    nextFilters,
+    force,
+  )
+}
+
+async function reloadCurrentView(force = false) {
+  const filters = buildViewFilters()
+  if (isGrouped.value) {
+    await loadAllForGrouped(filters, force)
     return
   }
-
-  loading.value = true
-  try {
-    const result = await fetchProjectList({
-      ...listFilters,
-      page: pageNo,
-      pageSize,
-    })
-    applyListResult(result)
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters) {
-  if (nextFilters) {
-    listFilters = { ...nextFilters }
-  }
-
-  const cacheKey = `${JSON.stringify({ ...listFilters, pageSize })}::anchor::${anchor}`
-  if (listCache.has(cacheKey)) {
-    applyListResult(listCache.get(cacheKey)!)
-    return
-  }
-
-  loading.value = true
-  try {
-    const result = await fetchProjectList({
-      ...listFilters,
-      anchor,
-      pageSize,
-    })
-    listCache.set(cacheKey, {
-      list: [...result.list],
-      total: result.total,
-      page: result.page,
-      pageSize: result.pageSize,
-      totalPages: result.totalPages,
-    })
-    listCache.set(buildListCacheKey(result.page), {
-      list: [...result.list],
-      total: result.total,
-      page: result.page,
-      pageSize: result.pageSize,
-      totalPages: result.totalPages,
-    })
-    applyListResult(result)
-  } finally {
-    loading.value = false
-  }
-}
-
-function clearCache() {
-  listCache.clear()
-}
-
-function patchItem(key: string, updater: (item: ProjectRecord) => ProjectRecord) {
-  const currentIndex = filteredData.value.findIndex((item) => item.projectNo === key)
-  if (currentIndex !== -1) {
-    filteredData.value[currentIndex] = updater(filteredData.value[currentIndex]!)
-  }
-
-  for (const [cacheKey, cached] of listCache.entries()) {
-    const index = cached.list.findIndex((item) => item.projectNo === key)
-    if (index === -1) continue
-
-    const nextList = [...cached.list]
-    nextList[index] = updater(nextList[index]!)
-    listCache.set(cacheKey, {
-      ...cached,
-      list: nextList,
-    })
-  }
+  await loadPage(page.value || 1, filters, force)
 }
 
 const editingAssignedPersonnel = ref<ProjectAssignee[]>([])
 const groupBy = ref<ProjectGroupBy>('')
-const groupData = ref<ProjectRecord[]>([])
-const groupLoading = ref(false)
 
 const isGrouped = computed(() => Boolean(groupBy.value))
-const recordGroups = computed(() =>
-  ProjectForm.groupRecords(isGrouped.value ? groupData.value : filteredData.value, groupBy.value),
+// 分组视图使用筛选桶内全量缓存（loadAll），各 Tab 内再按 pageSize 客户端分页
+const groupDisplayData = computed(() => {
+  void cacheRevision.value
+  const filters = getFilters()
+  return isGrouped.value ? getAllList(filters) : filteredData.value
+})
+const recordGroups = computed(() => ProjectForm.groupRecords(groupDisplayData.value, groupBy.value))
+
+type GroupedMode = Exclude<ProjectGroupBy, ''>
+const activeGroupKey = ref('')
+const activeGroupKeyByMode = ref<Partial<Record<GroupedMode, string>>>({})
+const groupPageByKey = ref<Record<string, number>>({})
+const groupPageByMode = ref<Partial<Record<GroupedMode, Record<string, number>>>>({})
+
+const activeGroup = computed(
+  () => recordGroups.value.find((group) => group.key === activeGroupKey.value) ?? null,
 )
+
+const activeGroupPageData = computed(() => {
+  const group = activeGroup.value
+  if (!group) return []
+  return paginateGroupMembers(group.members, group.key)
+})
+
+function getGroupPage(groupKey: string) {
+  return groupPageByKey.value[groupKey] || 1
+}
+
+function paginateGroupMembers(members: ProjectRecord[], groupKey: string) {
+  const pageNo = getGroupPage(groupKey)
+  const start = (pageNo - 1) * pageSize
+  const sorted = ProjectForm.sortForDisplay(members)
+  return sorted.slice(start, start + pageSize)
+}
+
+function handleGroupPageChange(groupKey: string, nextPage: number) {
+  groupPageByKey.value = {
+    ...groupPageByKey.value,
+    [groupKey]: nextPage,
+  }
+  const mode = groupBy.value
+  if (mode) {
+    groupPageByMode.value[mode] = { ...groupPageByKey.value }
+  }
+}
+
+function clampGroupPages() {
+  if (!groupBy.value) return
+
+  const nextPages = { ...groupPageByKey.value }
+  let changed = false
+
+  for (const group of recordGroups.value) {
+    const maxPage = Math.max(1, Math.ceil(group.members.length / pageSize))
+    const currentPage = nextPages[group.key] || 1
+    if (currentPage > maxPage) {
+      nextPages[group.key] = maxPage
+      changed = true
+    }
+  }
+
+  if (changed) {
+    groupPageByKey.value = nextPages
+    const mode = groupBy.value
+    if (mode) {
+      groupPageByMode.value[mode] = { ...nextPages }
+    }
+  }
+}
+
+function resolveActiveGroupKey(
+  groups: ReturnType<typeof ProjectForm.groupRecords>,
+  mode: ProjectGroupBy,
+) {
+  if (!mode || !groups.length) return ''
+  const saved = activeGroupKeyByMode.value[mode]
+  if (saved && groups.some((group) => group.key === saved)) return saved
+  return groups[0]?.key ?? ''
+}
+
+function resetGroupTabState() {
+  activeGroupKeyByMode.value = {}
+  activeGroupKey.value = ''
+  groupPageByMode.value = {}
+  groupPageByKey.value = {}
+}
+
+function syncActiveGroupKey() {
+  if (!groupBy.value) {
+    activeGroupKey.value = ''
+    return
+  }
+  activeGroupKey.value = resolveActiveGroupKey(recordGroups.value, groupBy.value)
+}
+
+function rememberActiveGroupKey() {
+  const mode = groupBy.value
+  if (mode && activeGroupKey.value) {
+    activeGroupKeyByMode.value[mode] = activeGroupKey.value
+  }
+}
 
 type PersonnelSelectOption = {
   id: string
@@ -212,34 +265,9 @@ const personnelSelectOptions = computed((): PersonnelSelectOption[] => {
   })
 })
 
-async function loadGroupData() {
-  if (!groupBy.value) return
-
-  groupLoading.value = true
+async function loadProjects(force = false) {
   try {
-    const result = await fetchProjectList({
-      keyword: searchForm.keyword,
-      status: searchForm.status,
-      all: true,
-    })
-    groupData.value = result.list
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
-  } finally {
-    groupLoading.value = false
-  }
-}
-
-async function loadProjects() {
-  try {
-    if (isGrouped.value) {
-      await loadGroupData()
-      return
-    }
-    await loadPage(1, {
-      keyword: searchForm.keyword,
-      status: searchForm.status,
-    })
+    await reloadCurrentView(force)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
   }
@@ -247,7 +275,7 @@ async function loadProjects() {
 
 async function handlePageChange(nextPage: number) {
   try {
-    await loadPage(nextPage)
+    await loadPage(nextPage, getFilters())
     highlightedProjectNo.value = ''
     nextTick(() => projectTableRef.value?.tableRef?.setScrollTop(0))
   } catch (error) {
@@ -259,24 +287,103 @@ async function handleSearch() {
   if (route.query.projectNo || route.query.projectNos) {
     router.replace({ path: BIZ_ROUTES.project })
   }
-  await loadProjects()
+  resetGroupTabState()
+  const filters = buildViewFilters()
+  try {
+    if (isGrouped.value) {
+      await loadAllForGrouped(filters, true)
+    } else {
+      await loadPage(1, filters, true)
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
+  }
 }
 
 async function handleReset() {
   searchForm.keyword = ''
   searchForm.status = ''
+  searchForm.tags = []
   highlightedProjectNo.value = ''
+  resetGroupTabState()
   if (route.query.projectNo || route.query.projectNos) {
     router.replace({ path: BIZ_ROUTES.project })
   }
   await loadProjects()
 }
 
-function handlePathUpdated(projectNo: string, localWorkPath: string) {
-  patchItem(projectNo, (item) => ({ ...item, localWorkPath }))
-  if (isGrouped.value) {
-    const grouped = groupData.value.find((item) => item.projectNo === projectNo)
-    if (grouped) grouped.localWorkPath = localWorkPath
+function handlePathUpdated(
+  projectNo: string,
+  localWorkPath: string,
+  designWorkPath: string,
+  detailWorkPath: string,
+) {
+  patchItem(projectNo, (item) => ({
+    ...item,
+    localWorkPath,
+    designWorkPath,
+    detailWorkPath,
+  }))
+}
+
+function handleNatureUpdated(updated: ProjectRecord) {
+  patchItem(updated.projectNo, (item) => ({
+    ...item,
+    ...updated,
+  }))
+}
+
+function handleDateUpdated(updated: ProjectRecord) {
+  patchItem(updated.projectNo, (item) => ({
+    ...item,
+    ...updated,
+  }))
+}
+
+function handlePersonnelUpdated(updated: ProjectRecord) {
+  patchItem(updated.projectNo, (item) => ({
+    ...item,
+    ...updated,
+  }))
+}
+
+function handleStatusUpdated(updated: ProjectRecord) {
+  patchItem(updated.projectNo, (item) => ({
+    ...item,
+    ...updated,
+  }))
+}
+
+async function handleDelete(row: ProjectRecord) {
+  const displayNo = ProjectForm.getDisplayProjectNo(row)
+  const label = row.name ? `「${row.name}」（${displayNo}）` : `「${displayNo}」`
+
+  try {
+    await ElMessageBox.confirm(`确定删除项目 ${label} 吗？此操作不可恢复。`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+
+  try {
+    await deleteProject(row.projectNo)
+    const activeFilters = getFilters()
+    clearFilterCache(activeFilters)
+    if (highlightedProjectNo.value === row.projectNo) {
+      highlightedProjectNo.value = ''
+    }
+    const nextPage = filteredData.value.length <= 1 && page.value > 1 ? page.value - 1 : page.value
+    if (isGrouped.value) {
+      await loadAllForGrouped(activeFilters, true)
+    } else {
+      await loadPage(nextPage, activeFilters, true)
+    }
+    ElMessage.success('项目已删除')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除项目失败')
   }
 }
 
@@ -314,6 +421,7 @@ onMounted(async () => {
 
 function openCreateDialog() {
   editingProjectNo.value = null
+  editingRecord.value = null
   editingAssignedPersonnel.value = []
   Object.assign(form, ProjectForm.createEmptyForm())
   dialogVisible.value = true
@@ -321,6 +429,7 @@ function openCreateDialog() {
 
 function openEditDialog(row: ProjectRecord) {
   editingProjectNo.value = row.projectNo
+  editingRecord.value = ProjectForm.cloneRecord(row)
   editingAssignedPersonnel.value = row.assignedPersonnel.map((person) => ({ ...person }))
   Object.assign(form, ProjectForm.createFormFromRecord(row))
   dialogVisible.value = true
@@ -328,19 +437,21 @@ function openEditDialog(row: ProjectRecord) {
 
 function handleDialogClose() {
   editingProjectNo.value = null
+  editingRecord.value = null
   editingAssignedPersonnel.value = []
   Object.assign(form, ProjectForm.createEmptyForm())
   formRef.value?.clearValidate()
 }
 
+function handleWorkflowUpdated(record: ProjectRecord) {
+  editingRecord.value = ProjectForm.cloneRecord(record)
+  form.detailCompleted = record.detailCompleted
+  form.status = record.status
+  replaceProjectInTable(record)
+}
+
 function replaceProjectInTable(updated: ProjectRecord) {
   patchItem(updated.projectNo, () => updated)
-  if (isGrouped.value) {
-    const index = groupData.value.findIndex((item) => item.projectNo === updated.projectNo)
-    if (index !== -1) {
-      groupData.value[index] = updated
-    }
-  }
 }
 
 async function handleSubmit() {
@@ -349,17 +460,23 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
+    const primaryWorkPath = form.detailWorkPath || form.designWorkPath
     if (editingProjectNo.value) {
       const updated = await updateProject(editingProjectNo.value, {
         name: form.name.trim(),
         status: form.status,
+        designCompleted: form.designCompleted,
+        detailCompleted: form.detailCompleted,
         natures: [...form.natures],
+        tagIds: [...form.tagIds],
         assignedPersonnelIds: [...form.assignedPersonnelIds],
         plannedStartDate: form.plannedStartDate,
         plannedEndDate: form.plannedEndDate,
         actualStartDate: form.actualStartDate,
         actualEndDate: form.actualEndDate,
-        localWorkPath: form.localWorkPath,
+        designWorkPath: form.designWorkPath,
+        detailWorkPath: form.detailWorkPath,
+        localWorkPath: primaryWorkPath,
       })
       replaceProjectInTable(updated)
       dialogVisible.value = false
@@ -371,26 +488,25 @@ async function handleSubmit() {
       projectNo: form.projectNo.trim(),
       name: form.name.trim(),
       status: form.status,
+      designCompleted: form.designCompleted,
+      detailCompleted: form.detailCompleted,
       natures: [...form.natures],
+      tagIds: [...form.tagIds],
       assignedPersonnelIds: [...form.assignedPersonnelIds],
       plannedStartDate: form.plannedStartDate,
       plannedEndDate: form.plannedEndDate,
       actualStartDate: form.actualStartDate,
       actualEndDate: form.actualEndDate,
-      localWorkPath: form.localWorkPath,
+      designWorkPath: form.designWorkPath,
+      detailWorkPath: form.detailWorkPath,
+      localWorkPath: primaryWorkPath,
     })
-    clearCache()
+    const activeFilters = getFilters()
+    clearFilterCache(activeFilters)
     if (isGrouped.value) {
-      await loadGroupData()
+      await loadAllForGrouped(activeFilters, true)
     } else {
-      await loadPage(
-        1,
-        {
-          keyword: searchForm.keyword,
-          status: searchForm.status,
-        },
-        true,
-      )
+      await loadPage(1, activeFilters, true)
     }
     dialogVisible.value = false
     ElMessage.success('项目已创建')
@@ -408,12 +524,17 @@ async function handleSubmit() {
 }
 
 function scrollToProject(projectNo: string) {
-  if (!filteredData.value.some((item) => item.projectNo === projectNo)) return
+  const displayNo = ProjectForm.parseBaseProjectNo(projectNo)
+  if (!filteredData.value.some((item) => ProjectForm.getDisplayProjectNo(item) === displayNo)) return
 
   nextTick(() => {
     const row = document.querySelector('.biz-data-table .el-table__row.is-highlighted')
     row?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   })
+}
+
+function normalizeHighlightProjectNo(projectNo: string) {
+  return ProjectForm.parseBaseProjectNo(projectNo)
 }
 
 async function applyProjectNoFromRoute() {
@@ -430,7 +551,9 @@ async function applyProjectNoFromRoute() {
 
     searchForm.keyword = ''
     searchForm.status = ''
-    highlightedProjectNo.value = typeof projectNo === 'string' ? projectNo : anchor
+    highlightedProjectNo.value = normalizeHighlightProjectNo(
+      typeof projectNo === 'string' && projectNo ? projectNo : anchor,
+    )
 
     try {
       await loadAroundAnchor(anchor, {})
@@ -444,7 +567,7 @@ async function applyProjectNoFromRoute() {
   if (typeof projectNo === 'string' && projectNo) {
     searchForm.keyword = ''
     searchForm.status = ''
-    highlightedProjectNo.value = projectNo
+    highlightedProjectNo.value = normalizeHighlightProjectNo(projectNo)
 
     try {
       await loadAroundAnchor(projectNo, {})
@@ -465,9 +588,54 @@ watch(
   },
 )
 
-watch(groupBy, () => {
-  void loadProjects()
+watch(
+  () => [...form.natures],
+  (natures) => {
+    if (!natures.includes(ProjectForm.NATURE.DESIGN)) {
+      form.designCompleted = false
+    }
+    if (!ProjectForm.hasDetailGroupNature({ natures })) {
+      form.detailCompleted = false
+    }
+  },
+)
+
+watch(groupBy, (mode, prevMode) => {
+  if (prevMode) {
+    const previousKey = activeGroupKey.value
+    if (previousKey) {
+      activeGroupKeyByMode.value[prevMode] = previousKey
+    }
+    if (Object.keys(groupPageByKey.value).length) {
+      groupPageByMode.value[prevMode] = { ...groupPageByKey.value }
+    }
+  }
+
+  if (mode) {
+    groupPageByKey.value = { ...(groupPageByMode.value[mode] ?? {}) }
+    syncActiveGroupKey()
+    void loadAllForGrouped(getFilters()).catch((error) => {
+      ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
+    })
+    return
+  }
+
+  groupPageByKey.value = {}
+  void loadPage(page.value || 1, getFilters()).catch((error) => {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
+  })
 })
+
+watch(recordGroups, () => {
+  if (!groupBy.value) return
+  const nextKey = resolveActiveGroupKey(recordGroups.value, groupBy.value)
+  if (nextKey !== activeGroupKey.value) {
+    activeGroupKey.value = nextKey
+  }
+  clampGroupPages()
+})
+
+watch(activeGroupKey, rememberActiveGroupKey)
 </script>
 
 <template>
@@ -475,7 +643,7 @@ watch(groupBy, () => {
     <template #header>
       <div class="card-header">
         <div class="card-header__title">
-          <span class="card-title">项目</span>
+          <span class="card-title">项目管理</span>
         </div>
         <el-button type="primary" @click="openCreateDialog">新建项目</el-button>
       </div>
@@ -491,7 +659,7 @@ watch(groupBy, () => {
             @keyup.enter="handleSearch"
           />
         </el-form-item>
-        <el-form-item label="状态">
+        <el-form-item label="流程状态">
           <el-select v-model="searchForm.status" placeholder="全部" style="width: 120px">
             <el-option
               v-for="item in statusOptions"
@@ -500,6 +668,9 @@ watch(groupBy, () => {
               :value="item.value"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="标签">
+          <TagSelect v-model="searchForm.tags" :allow-create="false" width="200px" placeholder="全部" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleSearch">查询</el-button>
@@ -519,7 +690,7 @@ watch(groupBy, () => {
       <span class="search-total">共 {{ total }} 条</span>
     </div>
 
-    <div v-if="!isGrouped">
+    <div v-if="!isGrouped" class="project-view-body project-list-panel">
       <div class="table-scroll">
         <ProjectTable
           ref="projectTableRef"
@@ -527,8 +698,14 @@ watch(groupBy, () => {
           :loading="loading"
           :show-nature="true"
           :show-personnel="true"
+          :personnel-options="personnelOptions"
           :highlighted-project-no="highlightedProjectNo"
           @edit="openEditDialog"
+          @delete="handleDelete"
+          @nature-updated="handleNatureUpdated"
+          @personnel-updated="handlePersonnelUpdated"
+          @status-updated="handleStatusUpdated"
+          @date-updated="handleDateUpdated"
           @path-updated="handlePathUpdated"
         />
       </div>
@@ -544,24 +721,55 @@ watch(groupBy, () => {
       </div>
     </div>
 
-    <div v-else v-loading="groupLoading" class="record-group-list">
-      <div v-for="group in recordGroups" :key="group.key" class="record-section">
-        <div class="record-section-header">
-          <span class="record-section-title">{{ group.label }}</span>
-          <span class="record-section-count">{{ group.members.length }} 项</span>
-        </div>
+    <div v-else v-loading="loading" class="project-view-body record-group-panel">
+      <el-tabs
+        v-if="recordGroups.length"
+        v-model="activeGroupKey"
+        class="record-group-tabs"
+      >
+        <el-tab-pane
+          v-for="group in recordGroups"
+          :key="group.key"
+          :name="group.key"
+        >
+          <template #label>
+            <span class="record-group-tab-label">
+              {{ group.label }}
+              <span class="record-group-tab-count">{{ group.members.length }}</span>
+            </span>
+          </template>
+        </el-tab-pane>
+      </el-tabs>
+      <div v-if="activeGroup" class="record-group-content">
         <div class="table-scroll">
           <ProjectTable
-            :data="group.members"
+            :data="activeGroupPageData"
+            table-height="100%"
             :show-nature="groupBy !== 'nature'"
             :show-personnel="groupBy !== 'personnel'"
+            :personnel-options="personnelOptions"
             :highlighted-project-no="highlightedProjectNo"
             @edit="openEditDialog"
+            @delete="handleDelete"
+            @nature-updated="handleNatureUpdated"
+            @personnel-updated="handlePersonnelUpdated"
+            @status-updated="handleStatusUpdated"
+            @date-updated="handleDateUpdated"
             @path-updated="handlePathUpdated"
           />
         </div>
+        <div class="table-pagination">
+          <el-pagination
+            :current-page="getGroupPage(activeGroup.key)"
+            :page-size="pageSize"
+            :total="activeGroup.members.length"
+            layout="total, prev, pager, next, jumper"
+            background
+            @current-change="(nextPage) => handleGroupPageChange(activeGroup.key, nextPage)"
+          />
+        </div>
       </div>
-      <el-empty v-if="!recordGroups.length" description="暂无匹配项目" />
+      <el-empty v-else-if="!loading" class="record-group-empty" description="暂无匹配项目" />
     </div>
   </el-card>
 
@@ -575,27 +783,56 @@ watch(groupBy, () => {
     <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
       <el-form-item label="项目号" prop="projectNo">
         <el-input
-          v-model="form.projectNo"
+          :model-value="editingProjectNo ? ProjectForm.getDisplayProjectNo({ projectNo: form.projectNo, baseProjectNo: '' }) : form.projectNo"
           placeholder="请输入项目号"
           :disabled="!!editingProjectNo"
+          @update:model-value="(value: string) => { if (!editingProjectNo) form.projectNo = value }"
         />
       </el-form-item>
       <el-form-item label="项目名称" prop="name">
         <el-input v-model="form.name" placeholder="请输入项目名称" />
       </el-form-item>
       <el-form-item label="本地路径">
-        <el-input
-          v-model="form.localWorkPath"
-          type="textarea"
-          :rows="2"
-          placeholder="相对路径，如 钢结构项目/AB24259"
-          class="local-path-input"
-        />
-        <div class="form-hint">
-          全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
-          <template v-if="localWorkPathPreview">
-            · 完整路径 {{ localWorkPathPreview }}
+        <div class="local-path-group">
+          <template v-if="form.natures.includes(ProjectForm.NATURE.DESIGN)">
+            <div class="local-path-item">
+              <div class="local-path-item__label">设计路径</div>
+              <el-input
+                v-model="form.designWorkPath"
+                type="textarea"
+                :rows="2"
+                placeholder="设计相对路径"
+                class="local-path-input"
+              />
+              <div class="form-hint">
+                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                <template v-if="designWorkPathPreview">
+                  · 完整路径 {{ designWorkPathPreview }}
+                </template>
+              </div>
+            </div>
           </template>
+          <template v-if="ProjectForm.hasDetailGroupNature(form)">
+            <div class="local-path-item">
+              <div class="local-path-item__label">细化路径</div>
+              <el-input
+                v-model="form.detailWorkPath"
+                type="textarea"
+                :rows="2"
+                placeholder="细化相对路径"
+                class="local-path-input"
+              />
+              <div class="form-hint">
+                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                <template v-if="detailWorkPathPreview">
+                  · 完整路径 {{ detailWorkPathPreview }}
+                </template>
+              </div>
+            </div>
+          </template>
+          <div v-if="!form.natures.length" class="form-hint">
+            请先选择项目性质，再填写对应的设计路径或细化路径。
+          </div>
         </div>
       </el-form-item>
       <el-form-item label="项目性质">
@@ -608,6 +845,9 @@ watch(groupBy, () => {
             {{ item.label }}
           </el-checkbox>
         </el-checkbox-group>
+      </el-form-item>
+      <el-form-item label="标签">
+        <TagSelect v-model="form.tagIds" />
       </el-form-item>
       <el-form-item label="分配人员">
         <el-select
@@ -628,7 +868,7 @@ watch(groupBy, () => {
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="状态">
+      <el-form-item label="流程状态">
         <el-radio-group v-model="form.status">
           <el-radio
             v-for="item in statusFormOptions"
@@ -638,6 +878,30 @@ watch(groupBy, () => {
             {{ item.label }}
           </el-radio>
         </el-radio-group>
+      </el-form-item>
+      <el-form-item label="完成状态">
+        <div class="completion-status-grid">
+          <el-checkbox v-model="form.designCompleted" :disabled="!form.natures.includes(ProjectForm.NATURE.DESIGN)">
+            设计已完成
+          </el-checkbox>
+          <el-checkbox
+            v-if="!DetailWorkflowForm.needsDetailWorkflow(form.natures)"
+            v-model="form.detailCompleted"
+            :disabled="!ProjectForm.hasDetailGroupNature(form)"
+          >
+            细化已完成
+          </el-checkbox>
+        </div>
+      </el-form-item>
+      <el-form-item
+        v-if="editingRecord && DetailWorkflowForm.needsDetailWorkflow(editingRecord.natures)"
+        label="细化流程"
+      >
+        <ProjectDetailWorkflowPanel
+          :record="editingRecord"
+          :preview-natures="form.natures"
+          @updated="handleWorkflowUpdated"
+        />
       </el-form-item>
       <el-form-item label="计划开始">
         <el-date-picker
@@ -693,6 +957,24 @@ watch(groupBy, () => {
   word-break: break-all;
 }
 
+.local-path-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.local-path-item {
+  width: 100%;
+}
+
+.local-path-item__label {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+}
+
 .form-hint {
   margin-top: 6px;
   font-size: 12px;
@@ -701,37 +983,109 @@ watch(groupBy, () => {
   word-break: break-all;
 }
 
-.record-group-list {
+/* 列表 / 分组共用内容区高度，避免 card 撑高导致页面级滚动 */
+.project-view-body {
+  --project-pagination-height: 48px;
+  --project-table-height: calc(100vh - 300px);
+  --project-data-block-height: calc(var(--project-table-height) + var(--project-pagination-height));
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  overflow-x: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.record-section-header {
+.project-list-panel .table-scroll {
+  height: var(--project-table-height);
+  overflow: hidden;
+}
+
+.record-group-panel {
+  height: var(--project-data-block-height);
+  gap: 0;
+}
+
+.record-group-content {
+  flex: 1;
+  min-height: 0;
   display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.record-group-panel .table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.record-group-panel .table-pagination {
+  flex-shrink: 0;
+  margin-top: 12px;
+}
+
+.record-group-empty {
+  flex: 1;
+  min-height: 0;
+}
+
+.record-group-tabs {
+  flex-shrink: 0;
+}
+
+.record-group-tabs :deep(.el-tabs__header) {
+  margin-bottom: 6px;
+}
+
+.record-group-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+}
+
+.record-group-tabs :deep(.el-tabs__item) {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 26px;
+}
+
+.record-group-tabs :deep(.el-tabs__active-bar) {
+  height: 2px;
+}
+
+.record-group-tab-label {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
+  gap: 4px;
 }
 
-.record-section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.record-section-count {
-  font-size: 13px;
+.record-group-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 14px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
   color: var(--el-text-color-secondary);
+  background: var(--el-fill-color);
+  border-radius: 7px;
+}
+
+.record-group-tabs :deep(.el-tabs__item.is-active) .record-group-tab-count {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
 }
 
 .personnel-select :deep(.el-select__tags) {
   flex-wrap: wrap;
   max-width: 100%;
+}
+
+.completion-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
 }
 
 </style>

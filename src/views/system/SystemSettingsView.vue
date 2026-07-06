@@ -37,11 +37,20 @@ type DriveRowLike = {
 const designPatternPreview = computed(() =>
   SystemConfigForm.buildPatternPreview(form.localWorkPath, 'design'),
 )
+const detailJiagongdanPatternPreview = computed(() =>
+  SystemConfigForm.buildPatternPreview(form.localWorkPath, 'detailJiagongdan'),
+)
 const detailPatternPreview = computed(() =>
   SystemConfigForm.buildPatternPreview(form.localWorkPath, 'detail'),
 )
 const designFullPathPreview = computed(() =>
   SystemConfigForm.buildSampleFullPath(form.localWorkPath, form.localWorkPath.pathPatterns.design),
+)
+const detailJiagongdanFullPathPreview = computed(() =>
+  SystemConfigForm.buildSampleFullPath(
+    form.localWorkPath,
+    form.localWorkPath.pathPatterns.detailJiagongdan,
+  ),
 )
 const detailFullPathPreview = computed(() =>
   SystemConfigForm.buildSampleFullPath(form.localWorkPath, form.localWorkPath.pathPatterns.detail),
@@ -286,7 +295,7 @@ onUnmounted(() => {
         ref="formRef"
         :model="form"
         :rules="formRules"
-        label-width="120px"
+        label-width="140px"
         class="config-form"
         @submit.prevent
       >
@@ -361,6 +370,17 @@ onUnmounted(() => {
           <span class="field-hint">单个字母，不含冒号</span>
         </el-form-item>
 
+        <el-form-item label="路径智能匹配">
+          <el-switch
+            v-model="form.localWorkPath.suggestPathOnMismatch"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <span class="field-hint block-hint">
+            项目管理页检查本地路径时，若路径不存在或与项目号不匹配，将自动搜索候选路径并提示是否更新
+          </span>
+        </el-form-item>
+
         <div class="section-title">路径组合规则</div>
         <p class="section-desc">
           创建项目本地路径时按规则拼接相对路径。可用变量：
@@ -374,7 +394,7 @@ onUnmounted(() => {
             v-model="form.localWorkPath.pathPatterns.design"
             type="textarea"
             :rows="2"
-            placeholder="如 e\itss\{year}\{projectNoDigits}#{projectName}"
+            placeholder="如 e\【项目归档】设计组\【{year}年】\{projectFolder}"
           />
           <div class="pattern-preview-block">
             <span class="pattern-preview-label">相对路径示例</span>
@@ -384,12 +404,27 @@ onUnmounted(() => {
           </div>
         </el-form-item>
 
+        <el-form-item label="深化组加工单规则">
+          <el-input
+            v-model="form.localWorkPath.pathPatterns.detailJiagongdan"
+            type="textarea"
+            :rows="2"
+            placeholder="如 f\1【项目归档】深化组\【{year}】加工单归档（甲供）\{projectFolder}"
+          />
+          <div class="pattern-preview-block">
+            <span class="pattern-preview-label">相对路径示例</span>
+            <code class="path-preview">{{ detailJiagongdanPatternPreview }}</code>
+            <span class="pattern-preview-label">完整路径示例</span>
+            <code class="path-preview">{{ detailJiagongdanFullPathPreview }}</code>
+          </div>
+        </el-form-item>
+
         <el-form-item label="深化组规则">
           <el-input
             v-model="form.localWorkPath.pathPatterns.detail"
             type="textarea"
             :rows="2"
-            placeholder="如 f\itss\{year}\{projectNoDigits}#{projectName}"
+            placeholder="如 f\1【项目归档】深化组\【{year}】深化组归档\{projectFolder}"
           />
           <div class="pattern-preview-block">
             <span class="pattern-preview-label">相对路径示例</span>

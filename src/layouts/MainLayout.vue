@@ -30,11 +30,11 @@ const isAdminUserFlag = isAdminUser(getUser())
 const systems = computed(() => {
   const list: { id: SystemId; name: string }[] = [
     { id: 'production', name: '门户' },
+    { id: 'business', name: '业务系统' },
     { id: 'personnel', name: '人员系统' },
   ]
-  // 仅管理员可见：业务系统、系统设置、开发
+  // 仅管理员可见：系统设置、开发
   if (isAdminUserFlag) {
-    list.splice(1, 0, { id: 'business', name: '业务系统' })
     list.push({ id: 'system', name: '系统设置' })
     if (isDev) {
       list.push({ id: 'development', name: '开发' })
@@ -57,14 +57,23 @@ const activeSystem = ref(resolveSystemFromPath(route.path))
 const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
   production: [
     { path: '/home', title: '首页', icon: 'House' },
+    { path: '/portal/my', title: '我的', icon: 'User' },
     { path: '/portal/about', title: '关于', icon: 'InfoFilled' },
     { path: '/portal/guide', title: '说明', icon: 'QuestionFilled' },
   ],
-  business: [
-    { path: '/business/contact', title: '联系单', icon: 'Message' },
-    { path: '/business/project', title: '项目', icon: 'Briefcase' },
-    { path: '/business/schedule', title: '工作安排', icon: 'Calendar' },
-  ],
+  business: isAdminUserFlag
+    ? [
+        { path: '/business/contact-browse', title: '联系单', icon: 'Message' },
+        { path: '/business/contact', title: '联系单管理', icon: 'EditPen' },
+        { path: '/business/project-browse', title: '项目', icon: 'Briefcase' },
+        { path: '/business/project', title: '项目管理', icon: 'Folder' },
+        { path: '/business/schedule', title: '工作安排', icon: 'Calendar' },
+        { path: '/business/detail-team-schedule', title: '细化组排班', icon: 'Grid' },
+      ]
+    : [
+        { path: '/business/contact-browse', title: '联系单', icon: 'Message' },
+        { path: '/business/project-browse', title: '项目', icon: 'Briefcase' },
+      ],
   personnel: isAdminUserFlag
     ? [
         { path: '/personnel/person', title: '人员', icon: 'Avatar' },
@@ -178,7 +187,11 @@ function goHome() {
           <LayoutTabs />
         </div>
         <el-main class="layout-main">
-          <router-view />
+          <router-view v-slot="{ Component, route: currentRoute }">
+            <keep-alive :max="20">
+              <component :is="Component" v-if="Component" :key="currentRoute.path" />
+            </keep-alive>
+          </router-view>
         </el-main>
       </el-container>
     </el-container>

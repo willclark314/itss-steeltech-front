@@ -1,15 +1,22 @@
 import type { FormRules, UploadRawFile, UploadUserFile } from 'element-plus'
+import { checkContactPdfMd5 } from '@/api/contacts'
+import { computeFileMd5 } from '@/utils/md5'
+import type { TagRecord } from '@/models/biz/tag'
 
 export type ContactStatus = 'pending' | 'processing' | 'done' | 'cancelled'
 export type ContactRelationType = 'primary' | 'supplement' | 'revision' | 'follow_up' | 'cancel'
 export type ProjectSourceType = 'own' | 'inherited' | 'added' | 'cancelled'
 export type ProjectMode = 'inherit' | 'split' | 'append'
 export type CancelScope = 'full' | 'partial'
+export type ContactFormType = 'contact' | 'processing'
 
 export interface ContactAttachment {
   id: string
   name: string
   url: string
+  createdAt?: string
+  version?: number
+  isCurrent?: boolean
 }
 
 export interface ProjectLink {
@@ -23,11 +30,12 @@ export interface ContactRecord {
   title: string
   projectNos: string[]
   projectLinks?: ProjectLink[]
+  tags: TagRecord[]
   receivedDate: string
+  familyMaxReceivedDate?: string
   urgency: string
   status: ContactStatus
   content: string
-  expectReplyDate: string
   parentId?: string
   rootId?: string
   relationType?: ContactRelationType
@@ -35,20 +43,23 @@ export interface ContactRecord {
   childCount?: number
   cancelScope?: CancelScope
   primaryPdf?: ContactAttachment
+  primaryPdfVersions?: ContactAttachment[]
   attachments: ContactAttachment[]
   createdAt: string
 }
 
 export interface ContactFormData {
   id?: string
+  contactType: ContactFormType
   title: string
   projectNos: string[]
+  tagIds: string[]
   receivedDate: string
   urgency: string
   content: string
-  expectReplyDate: string
   attachmentList: UploadUserFile[]
   primaryPdfList: UploadUserFile[]
+  primaryPdfVersions?: ContactAttachment[]
 }
 
 export interface ChildContactFormData {
@@ -67,14 +78,62 @@ export interface ChildContactFormData {
 export interface ContactFilterParams {
   keyword?: string
   status?: string
+  tags?: string[]
+}
+
+export type ContactGroupBy = '' | 'status' | 'urgency'
+
+export interface ContactRecordGroup {
+  key: string
+  label: string
+  members: ContactRecord[]
 }
 
 export interface PdfUploadPayload {
   fileName: string
-  content: string
+  content?: string
+  md5?: string
 }
 
 export class ContactForm {
+  static readonly JIAGONGDAN_PREFIX = '加工单-'
+  static readonly JIAGONGDAN_DEFAULT_ID = '加工单'
+  static readonly JIAGONGDAN_ID_REGEX = /^BRD\d{6}C\d{9}$/i
+  static readonly FORM_TYPE_OPTIONS = [
+    { label: '联系单', value: 'contact' as const },
+    { label: '加工单', value: 'processing' as const },
+  ]
+
+  static isProcessingFormId(id: string): boolean {
+    const normalized = (id || '').trim()
+    return (
+      normalized === ContactForm.JIAGONGDAN_DEFAULT_ID ||
+      normalized.startsWith(ContactForm.JIAGONGDAN_PREFIX) ||
+      ContactForm.JIAGONGDAN_ID_REGEX.test(normalized)
+    )
+  }
+
+  static parseBaseProjectNo(projectNo: string): string {
+    const normalized = (projectNo || '').trim()
+    const sepIndex = normalized.search(/[~#]/)
+    if (sepIndex === -1) return normalized
+    return normalized.slice(0, sepIndex)
+  }
+
+  static formatDisplayId(id: string, projectNo?: string): string {
+    if (ContactForm.isProcessingFormId(id)) {
+      const normalizedProjectNo = ContactForm.parseBaseProjectNo(projectNo || '')
+      return normalizedProjectNo ? `加工单(${normalizedProjectNo})` : '加工单'
+    }
+    return id
+  }
+
+  static maxProjectNoForSort(projectNos?: string[]): string {
+    const nos = (projectNos || []).filter((no) => no.trim())
+    if (!nos.length) return ''
+    return nos.reduce((max, no) => (no.localeCompare(max, 'zh-CN') > 0 ? no : max), nos[0])
+  }
+
   static readonly STATUS = {
     PENDING: 'pending',
     PROCESSING: 'processing',
@@ -130,17 +189,21 @@ export class ContactForm {
 
   static readonly URGENCY_OPTIONS = ['普通', '紧急'] as const
 
+  static readonly GROUP_BY_OPTIONS = [
+    { label: '列表', value: '' as ContactGroupBy },
+    { label: '按状态', value: 'status' as ContactGroupBy },
+    { label: '按紧急程度', value: 'urgency' as ContactGroupBy },
+  ] as const
+
   static readonly FORM_RULES: FormRules = {
     title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
     receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
-    content: [{ required: true, message: '请输入联系内容', trigger: 'blur' }],
   }
 
   static readonly EDIT_FORM_RULES: FormRules = {
     id: [{ required: true, message: '请输入联系单号', trigger: 'blur' }],
     title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
     receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
-    content: [{ required: true, message: '请输入联系内容', trigger: 'blur' }],
   }
 
   readonly record: ContactRecord
@@ -193,8 +256,10 @@ export class ContactForm {
       ...record,
       projectNos: [...(record.projectNos || [])],
       projectLinks: (record.projectLinks || []).map((item) => ({ ...item })),
+      tags: (record.tags || []).map((item) => ({ ...item })),
       attachments: (record.attachments || []).map((file) => ({ ...file })),
       primaryPdf: record.primaryPdf ? { ...record.primaryPdf } : undefined,
+      primaryPdfVersions: (record.primaryPdfVersions || []).map((file) => ({ ...file })),
     }
   }
 
@@ -227,14 +292,16 @@ export class ContactForm {
   static createEmptyForm(): ContactFormData {
     return {
       id: '',
+      contactType: 'contact',
       title: '',
       projectNos: [],
+      tagIds: [],
       receivedDate: ContactForm.formatDate(),
       urgency: '普通',
       content: '',
-      expectReplyDate: '',
       attachmentList: [],
       primaryPdfList: [],
+      primaryPdfVersions: [],
     }
   }
 
@@ -255,41 +322,100 @@ export class ContactForm {
 
   static createFormFromRecord(record: ContactRecord): ContactFormData {
     return {
-      id: record.id,
+      id: ContactForm.isProcessingFormId(record.id) ? ContactForm.JIAGONGDAN_DEFAULT_ID : record.id,
+      contactType: ContactForm.isProcessingFormId(record.id) ? 'processing' : 'contact',
       title: record.title,
       projectNos: [...(record.projectNos || [])],
+      tagIds: (record.tags || []).map((item) => item.id),
       receivedDate: record.receivedDate,
       urgency: record.urgency,
       content: record.content || '',
-      expectReplyDate: record.expectReplyDate || '',
       attachmentList: ContactForm.toUploadFileList(record.attachments),
       primaryPdfList: ContactForm.toUploadFileList(record.primaryPdf ? [record.primaryPdf] : []),
+      primaryPdfVersions: [...(record.primaryPdfVersions || [])],
     }
   }
 
   static sortForDisplay(records: ContactRecord[]) {
+    const familySortDate = (record: ContactRecord) =>
+      ContactForm.toDateOnly(record.familyMaxReceivedDate || record.receivedDate)
+
     const rootDateMap = new Map<string, string>()
     for (const record of records) {
-      if (!record.rootId || record.rootId === record.id) {
-        rootDateMap.set(record.id, record.receivedDate)
-      }
-    }
-    for (const record of records) {
       const rootId = record.rootId || record.id
-      if (!rootDateMap.has(rootId)) {
-        rootDateMap.set(rootId, record.receivedDate)
+      const recordDate = familySortDate(record)
+      const prevDate = rootDateMap.get(rootId)
+      if (!prevDate || recordDate > prevDate) {
+        rootDateMap.set(rootId, recordDate)
       }
     }
 
     return [...records].sort((a, b) => {
       const rootA = a.rootId || a.id
       const rootB = b.rootId || b.id
-      const dateA = rootDateMap.get(rootA) ?? a.receivedDate
-      const dateB = rootDateMap.get(rootB) ?? b.receivedDate
+      const dateA = rootDateMap.get(rootA) ?? familySortDate(a)
+      const dateB = rootDateMap.get(rootB) ?? familySortDate(b)
       if (dateA !== dateB) return dateB.localeCompare(dateA)
+
+      const projectNoA = ContactForm.maxProjectNoForSort(a.projectNos)
+      const projectNoB = ContactForm.maxProjectNoForSort(b.projectNos)
+      if (projectNoA !== projectNoB) return projectNoB.localeCompare(projectNoA, 'zh-CN')
+
       if (rootA !== rootB) return rootA.localeCompare(rootB)
       return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
     })
+  }
+
+  static groupRecords(
+    records: ContactRecord[],
+    groupBy: ContactGroupBy,
+  ): ContactRecordGroup[] {
+    if (!groupBy) return []
+
+    if (groupBy === 'status') {
+      const statusOrder = ContactForm.STATUS_OPTIONS.filter((item) => item.value).map(
+        (item) => item.value,
+      )
+      return ContactForm.groupByField(
+        records,
+        (record) => record.status,
+        statusOrder,
+        (key) => ContactForm.STATUS_MAP[key as ContactStatus]?.label ?? key,
+      )
+    }
+
+    return ContactForm.groupByField(
+      records,
+      (record) => record.urgency || '普通',
+      [...ContactForm.URGENCY_OPTIONS],
+    )
+  }
+
+  private static groupByField(
+    records: ContactRecord[],
+    getKey: (record: ContactRecord) => string,
+    orderedKeys: readonly string[],
+    getLabel?: (key: string) => string,
+  ): ContactRecordGroup[] {
+    const groups = new Map<string, ContactRecord[]>()
+
+    for (const record of records) {
+      const key = getKey(record)
+      const members = groups.get(key) ?? []
+      members.push(record)
+      groups.set(key, members)
+    }
+
+    const extraKeys = [...groups.keys()].filter((key) => !orderedKeys.includes(key))
+    const keySequence = [...orderedKeys, ...extraKeys]
+
+    return keySequence
+      .map((key) => ({
+        key,
+        label: getLabel?.(key) ?? key,
+        members: ContactForm.sortForDisplay(groups.get(key) ?? []),
+      }))
+      .filter((group) => group.members.length > 0)
   }
 
   static filter(records: ContactRecord[], { keyword = '', status = '' }: ContactFilterParams = {}) {
@@ -326,7 +452,6 @@ export class ContactForm {
     record.receivedDate = form.receivedDate
     record.urgency = form.urgency
     record.content = form.content
-    record.expectReplyDate = form.expectReplyDate
     record.attachments = ContactForm.normalizeAttachments(attachmentList)
   }
 
@@ -341,7 +466,16 @@ export class ContactForm {
     return [...dataTransfer.files].filter((file) => ContactForm.isPdfFile(file))
   }
 
-  static async fileToBase64(file: File): Promise<PdfUploadPayload> {
+  static async fileToUploadPayload(file: File): Promise<PdfUploadPayload> {
+    const md5 = await computeFileMd5(file)
+    const check = await checkContactPdfMd5(md5)
+    if (check.exists) {
+      return {
+        fileName: file.name,
+        md5,
+      }
+    }
+
     const buffer = await file.arrayBuffer()
     const bytes = new Uint8Array(buffer)
     let binary = ''
@@ -351,11 +485,12 @@ export class ContactForm {
     return {
       fileName: file.name,
       content: btoa(binary),
+      md5,
     }
   }
 
   static async filesToUploadPayload(files: File[]): Promise<PdfUploadPayload[]> {
-    return Promise.all(files.map((file) => ContactForm.fileToBase64(file)))
+    return Promise.all(files.map((file) => ContactForm.fileToUploadPayload(file)))
   }
 
   static filesToAttachmentList(files: File[]): UploadUserFile[] {
@@ -394,6 +529,10 @@ export class ContactForm {
       .map((item) => item.raw)
       .filter((raw): raw is UploadRawFile => raw instanceof File)
     return ContactForm.filesToUploadPayload(files)
+  }
+
+  static hasNewPrimaryUpload(fileList: UploadUserFile[]) {
+    return fileList.some((item) => item.raw instanceof File)
   }
 
   static matchContactKeyword(record: ContactRecord, keyword: string) {

@@ -1,5 +1,6 @@
 export interface WorkPathPatternConfig {
   design: string
+  detailJiagongdan: string
   detail: string
 }
 
@@ -11,14 +12,17 @@ export interface LocalWorkPathConfig {
   drive: string
   /** 项目本地路径组合规则，支持 {year} {year2} {projectNo} {projectNoDigits} {projectName} {projectFolder} {date} */
   pathPatterns: WorkPathPatternConfig
+  /** 路径不匹配时自动搜索并提示修改 */
+  suggestPathOnMismatch: boolean
 }
 
 export class BusinessSystemConfig {
   static readonly DEFAULT_SERVER_IP = '10.10.1.175'
 
   static readonly DEFAULT_PATH_PATTERNS: WorkPathPatternConfig = {
-    design: 'e\\itss\\{year}\\{projectNoDigits}#{projectName}',
-    detail: 'f\\itss\\{year}\\{projectNoDigits}#{projectName}',
+    design: 'e\\【项目归档】设计组\\【{year}年】\\{projectFolder}',
+    detailJiagongdan: 'f\\1【项目归档】深化组\\【{year}】加工单归档（甲供）\\{projectFolder}',
+    detail: 'f\\1【项目归档】深化组\\【{year}】深化组归档\\{projectFolder}',
   }
 
   static readonly LOCAL_WORK_PATH: LocalWorkPathConfig = {
@@ -26,6 +30,7 @@ export class BusinessSystemConfig {
     ips: [BusinessSystemConfig.DEFAULT_SERVER_IP],
     drive: 'F',
     pathPatterns: { ...BusinessSystemConfig.DEFAULT_PATH_PATTERNS },
+    suggestPathOnMismatch: false,
   }
 
   static normalizeIpList(ips: unknown, fallbackIp = BusinessSystemConfig.DEFAULT_SERVER_IP): string[] {
@@ -53,6 +58,9 @@ export class BusinessSystemConfig {
     const defaults = BusinessSystemConfig.DEFAULT_PATH_PATTERNS
     return {
       design: String(patterns?.design ?? defaults.design).trim() || defaults.design,
+      detailJiagongdan:
+        String(patterns?.detailJiagongdan ?? defaults.detailJiagongdan).trim()
+        || defaults.detailJiagongdan,
       detail: String(patterns?.detail ?? defaults.detail).trim() || defaults.detail,
     }
   }
@@ -71,6 +79,7 @@ export class BusinessSystemConfig {
         String(config.drive ?? BusinessSystemConfig.LOCAL_WORK_PATH.drive),
       ),
       pathPatterns: BusinessSystemConfig.normalizePathPatterns(config.pathPatterns),
+      suggestPathOnMismatch: Boolean(config.suggestPathOnMismatch),
     }
   }
 

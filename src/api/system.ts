@@ -22,6 +22,37 @@ export function checkPathExists(path: string) {
   return request<{ path: string; exists: boolean }>(`/system/path-exists?${query.toString()}`)
 }
 
+export interface ProjectPathMatch {
+  relativePath: string
+  fullPath: string
+}
+
+export interface SearchProjectPathOptions {
+  relativePath?: string
+  natures?: ProjectNatureCode[]
+  receivedDate?: string
+  projectName?: string
+  contactFormIds?: string[]
+  isJiagongdan?: boolean
+}
+
+export function searchProjectPath(projectNo: string, options: SearchProjectPathOptions = {}) {
+  const query = new URLSearchParams({ projectNo })
+  if (options.relativePath) query.set('relativePath', options.relativePath)
+  if (options.natures?.length) query.set('natures', options.natures.join(','))
+  if (options.receivedDate) query.set('receivedDate', options.receivedDate)
+  if (options.projectName) query.set('projectName', options.projectName)
+  if (options.contactFormIds?.length) {
+    query.set('contactFormIds', options.contactFormIds.join(','))
+  }
+  if (options.isJiagongdan !== undefined) {
+    query.set('isJiagongdan', options.isJiagongdan ? 'true' : 'false')
+  }
+  return request<{ projectNo: string; matches: ProjectPathMatch[] }>(
+    `/system/search-project-path?${query.toString()}`,
+  )
+}
+
 export interface HostDriveInfo {
   name: string
   label: string

@@ -11,9 +11,12 @@ import type {
 export interface ContactQuery {
   keyword?: string
   status?: string
+  assignedPersonnelId?: string
+  tags?: string[]
   page?: number
   pageSize?: number
   anchor?: string
+  all?: boolean
 }
 
 export interface ContactListResult {
@@ -32,6 +35,7 @@ export interface CreateContactPayload {
   content?: string
   expectReplyDate?: string
   projectNos?: string[]
+  tagIds?: string[]
   primaryPdf?: PdfUploadPayload
   supplementFiles?: PdfUploadPayload[]
 }
@@ -45,6 +49,8 @@ export interface UpdateContactPayload {
   expectReplyDate?: string
   status?: ContactStatus
   projectNos?: string[]
+  tagIds?: string[]
+  primaryPdf?: PdfUploadPayload
 }
 
 export interface CreateChildContactPayload {
@@ -61,13 +67,30 @@ export interface CreateChildContactPayload {
   supplementFiles?: PdfUploadPayload[]
 }
 
+export interface ContactPdfMd5CheckResult {
+  exists: boolean
+  fileMd5?: string
+  fileSize?: number
+  filePath?: string
+}
+
+export function checkContactPdfMd5(md5: string) {
+  return request<ContactPdfMd5CheckResult>('/contacts/pdfs/check', {
+    method: 'POST',
+    body: JSON.stringify({ md5 }),
+  })
+}
+
 export function fetchContactList(params: ContactQuery = {}) {
   const query = new URLSearchParams()
   if (params.keyword) query.set('keyword', params.keyword)
   if (params.status) query.set('status', params.status)
+  if (params.assignedPersonnelId) query.set('assignedPersonnelId', params.assignedPersonnelId)
+  if (params.tags?.length) query.set('tags', params.tags.join(','))
   if (params.page) query.set('page', String(params.page))
   if (params.pageSize) query.set('pageSize', String(params.pageSize))
   if (params.anchor) query.set('anchor', params.anchor)
+  if (params.all) query.set('all', 'true')
   const suffix = query.toString() ? `?${query.toString()}` : ''
   return request<ContactListResult>(`/contacts${suffix}`)
 }

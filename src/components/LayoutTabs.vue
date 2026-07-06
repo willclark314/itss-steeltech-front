@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router'
 import type { TabsPaneContext } from 'element-plus'
+import { getUser, isAdminUser } from '@/utils/auth'
 
 interface TabItem {
   path: string
@@ -10,15 +11,73 @@ interface TabItem {
 }
 
 const HOME_PATH = '/home'
+const TABS_STORAGE_PREFIX = 'itss_layout_tabs'
 
 const route = useRoute()
 const router = useRouter()
 
 const tabsRef = ref()
 const activeTab = ref(HOME_PATH)
-const openedTabs = ref<TabItem[]>([
-  { path: HOME_PATH, title: '首页', affix: true },
-])
+
+function getTabsStorageKey(): string {
+  const user = getUser()
+  const scope = user?.username || user?.employeeNo || 'guest'
+  return `${TABS_STORAGE_PREFIX}_${scope}`
+}
+
+function isValidTabPath(path: string): boolean {
+  const resolved = router.resolve(path)
+  if (resolved.matched.length === 0 || !resolved.meta?.title || resolved.meta?.public) {
+    return false
+  }
+  if (resolved.meta.adminOnly && !isAdminUser(getUser())) {
+    return false
+  }
+  return true
+}
+
+function normalizeTab(tab: TabItem): TabItem | null {
+  if (!isValidTabPath(tab.path)) return null
+  const resolved = router.resolve(tab.path)
+  return {
+    path: tab.path,
+    title: String(resolved.meta.title),
+    affix: tab.path === HOME_PATH,
+  }
+}
+
+function loadStoredTabs(): TabItem[] {
+  try {
+    const raw = localStorage.getItem(getTabsStorageKey())
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as TabItem[]
+    if (!Array.isArray(parsed)) return []
+
+    const tabs = parsed
+      .map((tab) => normalizeTab(tab))
+      .filter((tab): tab is TabItem => tab !== null)
+
+    const homeIndex = tabs.findIndex((tab) => tab.path === HOME_PATH)
+    if (homeIndex === -1) {
+      tabs.unshift({ path: HOME_PATH, title: '首页', affix: true })
+    } else if (homeIndex > 0) {
+      const [home] = tabs.splice(homeIndex, 1)
+      tabs.unshift(home)
+    }
+
+    return tabs
+  } catch {
+    return []
+  }
+}
+
+function saveTabs(tabs: TabItem[]) {
+  localStorage.setItem(getTabsStorageKey(), JSON.stringify(tabs))
+}
+
+const defaultTabs: TabItem[] = [{ path: HOME_PATH, title: '首页', affix: true }]
+const storedTabs = loadStoredTabs()
+const openedTabs = ref<TabItem[]>(storedTabs.length > 0 ? storedTabs : [...defaultTabs])
 
 let draggedTabIndex: number | null = null
 let dragHandlersBound = false
@@ -192,7 +251,8 @@ function teardownTabDrag() {
 
 watch(
   openedTabs,
-  () => {
+  (tabs) => {
+    saveTabs(tabs)
     nextTick(() => {
       if (dragHandlersBound) teardownTabDrag()
       setupTabDrag()

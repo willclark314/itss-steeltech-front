@@ -12,7 +12,9 @@
 .biz-data-table td.project-no-column,
 .biz-data-table td.contact-form-column,
 .biz-data-table td.contact-id-column,
-.biz-data-table td.personnel-column {
+.biz-data-table td.status-column,
+.biz-data-table td.personnel-column,
+.biz-data-table td.nature-column {
   vertical-align: middle;
 }
 
@@ -40,6 +42,7 @@
 }
 
 .biz-data-table .nature-tag-list,
+.biz-data-table .flow-status-tag-list,
 .biz-data-table .project-no-tag-list,
 .biz-data-table .contact-form-tag-list,
 .biz-data-table .personnel-tag-list {
@@ -55,12 +58,33 @@
 
 .biz-data-table .project-no-column .el-tooltip__trigger,
 .biz-data-table .contact-form-column .el-tooltip__trigger,
-.biz-data-table .personnel-column .el-tooltip__trigger {
+.biz-data-table .contact-id-column .el-tooltip__trigger,
+.biz-data-table .personnel-column .el-tooltip__trigger,
+.biz-data-table .nature-column .el-tooltip__trigger {
   display: inline-flex !important;
   align-items: center;
   width: 100%;
   max-width: 100%;
   height: 100%;
+}
+
+.biz-data-table .personnel-column .cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.biz-data-table .personnel-column .el-popover__reference,
+.biz-data-table .personnel-column .el-tooltip__trigger {
+  justify-content: flex-start;
+}
+
+.biz-data-table .status-column .cell {
+  display: flex;
+  align-items: center;
+  height: var(--biz-table-row-height);
+  overflow: hidden;
 }
 
 .biz-data-table .el-table__body tr {
@@ -98,10 +122,16 @@
 .biz-data-table .contact-id-cell {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   width: 100%;
   height: 100%;
+  min-width: 0;
+}
+
+.biz-data-table .contact-id-cell .el-tooltip__trigger {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .biz-data-table .contact-id-cell.is-child {

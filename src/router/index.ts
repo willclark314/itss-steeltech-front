@@ -32,22 +32,54 @@ const mainChildren: RouteRecordRaw[] = [
     meta: { title: '说明' },
   },
   {
+    path: 'portal/contact',
+    redirect: '/business/contact-browse',
+  },
+  {
+    path: 'portal/my',
+    name: 'MyWorkspace',
+    component: () => import('@/views/biz/MyView.vue'),
+    meta: { title: '我的' },
+  },
+  {
+    path: 'business/my',
+    redirect: '/portal/my',
+  },
+  {
+    path: 'business/contact-browse',
+    name: 'ContactBrowse',
+    component: () => import('@/views/biz/ContactBrowseView.vue'),
+    meta: { title: '联系单' },
+  },
+  {
     path: 'business/contact',
     name: 'ContactForm',
     component: () => import('@/views/biz/ContactFormView.vue'),
-    meta: { title: '联系单', adminOnly: true },
+    meta: { title: '联系单管理', adminOnly: true },
+  },
+  {
+    path: 'business/project-browse',
+    name: 'ProjectBrowse',
+    component: () => import('@/views/biz/ProjectBrowseView.vue'),
+    meta: { title: '项目' },
   },
   {
     path: 'business/project',
     name: 'Project',
     component: () => import('@/views/biz/ProjectView.vue'),
-    meta: { title: '项目', adminOnly: true },
+    meta: { title: '项目管理', adminOnly: true },
   },
   {
     path: 'business/schedule',
     name: 'ProjectSchedule',
     component: () => import('@/views/biz/ScheduleView.vue'),
     meta: { title: '工作安排', adminOnly: true },
+  },
+  {
+    path: 'business/detail-team-schedule',
+    name: 'DetailTeamSchedule',
+    component: () => import('@/views/biz/DetailTeamScheduleView.vue'),
+    meta: { title: '细化组排班', adminOnly: true },
   },
   {
     path: 'personnel/person',
