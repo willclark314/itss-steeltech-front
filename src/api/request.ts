@@ -4,7 +4,13 @@ const SESSION_EXPIRED_MESSAGE = '登录已过期，请重新登录'
 
 let authRedirecting = false
 
-async function handleAuthFailure(): Promise<void> {
+async function handleAuthFailure(requestToken: string | null): Promise<void> {
+  const currentToken = localStorage.getItem('itss_token')
+  // 请求发出后用户已重新登录，忽略旧 token 触发的 401
+  if (requestToken !== null && requestToken !== currentToken) {
+    return
+  }
+
   if (authRedirecting) return
   authRedirecting = true
 
@@ -17,6 +23,8 @@ async function handleAuthFailure(): Promise<void> {
     ElMessage.warning(SESSION_EXPIRED_MESSAGE)
   } catch {
     // ignore
+  } finally {
+    authRedirecting = false
   }
 
   if (window.location.hash !== '#/login') {
@@ -40,8 +48,9 @@ export async function request<T = unknown>(
 
   if (!response.ok) {
     // 401 未登录；422 为 JWT 无效/过期（Flask-JWT-Extended 默认行为）
-    if (response.status === 401 || response.status === 422) {
-      await handleAuthFailure()
+    const isLoginRequest = url.includes('/auth/login')
+    if ((response.status === 401 || response.status === 422) && !isLoginRequest) {
+      await handleAuthFailure(token)
       throw new Error(SESSION_EXPIRED_MESSAGE)
     }
 

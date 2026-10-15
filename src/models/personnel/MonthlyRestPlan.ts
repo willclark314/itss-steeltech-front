@@ -7,7 +7,7 @@ export interface MonthlyRestRecord {
   year: number
   /** 1-12 */
   month: number
-  /** ISO 日期字符串数组，如 ["2026-06-07", "2026-06-14"]，仅限周六/周日 */
+  /** ISO 日期字符串数组，如 ["2026-06-07", "2026-06-14"]；中国籍以周末为主，每月可额外 1 个非周末任意日；印尼籍可选任意日期 */
   restDays: string[]
 }
 
@@ -36,6 +36,21 @@ export interface MonthlyRestTeamGroup {
 }
 
 export class MonthlyRestForm {
+  static readonly INDONESIAN_REST_DAYS_MIN = 1
+  static readonly INDONESIAN_REST_DAYS_MAX = 4
+  /** 中国籍每月额外可任选的非周末天数上限 */
+  static readonly CHINESE_FLEX_WEEKDAY_MAX = 1
+
+  /** 判断是否为印尼籍（月休可选任意日期） */
+  static isIndonesianNationality(nationality?: string): boolean {
+    return (nationality || '').trim() === '印度尼西亚'
+  }
+
+  /** 是否为周六或周日 */
+  static isWeekendWeekdayLabel(weekday: string): boolean {
+    return weekday === '周六' || weekday === '周日'
+  }
+
   /** 获取指定年月的所有日期（1号到最后一天） */
   static getAllDaysOfMonth(year: number, month: number): WeekendDay[] {
     const days: WeekendDay[] = []

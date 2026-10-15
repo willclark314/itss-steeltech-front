@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { updateProject } from '@/api/projects'
+import PersonnelAssignSelect from '@/components/biz/PersonnelAssignSelect.vue'
 import type { PersonnelRecord } from '@/models/personnel'
 import type { ProjectRecord } from '@/models/biz/project'
 
@@ -14,34 +15,9 @@ const emit = defineEmits<{
   updated: [record: ProjectRecord]
 }>()
 
-type PersonnelSelectOption = {
-  id: string
-  name: string
-  team: string
-}
-
 const popoverVisible = ref(false)
 const saving = ref(false)
 const draftIds = ref<string[]>([])
-
-const selectOptions = computed((): PersonnelSelectOption[] => {
-  const optionMap = new Map<string, PersonnelSelectOption>()
-
-  for (const person of props.personnelOptions) {
-    optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-  }
-
-  for (const person of props.project.assignedPersonnel) {
-    if (!optionMap.has(person.id)) {
-      optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-    }
-  }
-
-  return [...optionMap.values()].sort((a, b) => {
-    const teamCompare = a.team.localeCompare(b.team, 'zh-CN')
-    return teamCompare !== 0 ? teamCompare : a.name.localeCompare(b.name, 'zh-CN')
-  })
-})
 
 function syncDraft() {
   draftIds.value = [...props.project.assignedPersonnelIds]
@@ -84,7 +60,7 @@ async function handlePopoverHide() {
     v-model:visible="popoverVisible"
     class="personnel-popover"
     placement="bottom-start"
-    :width="280"
+    :width="300"
     trigger="click"
     :disabled="saving"
     @show="handlePopoverShow"
@@ -125,22 +101,12 @@ async function handlePopoverHide() {
     </template>
 
     <div class="personnel-picker" @click.stop>
-      <el-select
+      <PersonnelAssignSelect
         v-model="draftIds"
-        multiple
-        filterable
-        collapse-tags
-        collapse-tags-tooltip
+        :personnel-options="personnelOptions"
+        :extra-assignees="project.assignedPersonnel"
         placeholder="选择分配人员"
-        style="width: 100%"
-      >
-        <el-option
-          v-for="person in selectOptions"
-          :key="person.id"
-          :label="`${person.name} · ${person.team}`"
-          :value="person.id"
-        />
-      </el-select>
+      />
     </div>
   </el-popover>
 </template>

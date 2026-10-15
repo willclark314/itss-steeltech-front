@@ -4,14 +4,21 @@ export interface WorkPathPatternConfig {
   detail: string
 }
 
+export interface ArchiveTemplatePathConfig {
+  design: string
+  detailJiagongdan: string
+  detail: string
+}
+
 export interface LocalWorkPathConfig {
   /** 当前用于拼接 UNC 路径的 IP */
   ip: string
   /** 可选 IP 列表（含预设、本机 IP 与自定义输入） */
   ips: string[]
-  drive: string
   /** 项目本地路径组合规则，支持 {year} {year2} {projectNo} {projectNoDigits} {projectName} {projectFolder} {date} */
   pathPatterns: WorkPathPatternConfig
+  /** 创建归档路径时从此处拷贝目录结构 */
+  archiveTemplatePaths: ArchiveTemplatePathConfig
   /** 路径不匹配时自动搜索并提示修改 */
   suggestPathOnMismatch: boolean
 }
@@ -25,11 +32,17 @@ export class BusinessSystemConfig {
     detail: 'f\\1【项目归档】深化组\\【{year}】深化组归档\\{projectFolder}',
   }
 
+  static readonly DEFAULT_ARCHIVE_TEMPLATE_PATHS: ArchiveTemplatePathConfig = {
+    design: '',
+    detailJiagongdan: '',
+    detail: '',
+  }
+
   static readonly LOCAL_WORK_PATH: LocalWorkPathConfig = {
     ip: BusinessSystemConfig.DEFAULT_SERVER_IP,
     ips: [BusinessSystemConfig.DEFAULT_SERVER_IP],
-    drive: 'F',
     pathPatterns: { ...BusinessSystemConfig.DEFAULT_PATH_PATTERNS },
+    archiveTemplatePaths: { ...BusinessSystemConfig.DEFAULT_ARCHIVE_TEMPLATE_PATHS },
     suggestPathOnMismatch: false,
   }
 
@@ -65,6 +78,17 @@ export class BusinessSystemConfig {
     }
   }
 
+  static normalizeArchiveTemplatePaths(
+    paths: Partial<ArchiveTemplatePathConfig> | undefined,
+  ): ArchiveTemplatePathConfig {
+    const defaults = BusinessSystemConfig.DEFAULT_ARCHIVE_TEMPLATE_PATHS
+    return {
+      design: String(paths?.design ?? defaults.design).trim(),
+      detailJiagongdan: String(paths?.detailJiagongdan ?? defaults.detailJiagongdan).trim(),
+      detail: String(paths?.detail ?? defaults.detail).trim(),
+    }
+  }
+
   static normalizeLocalWorkPathConfig(config: Partial<LocalWorkPathConfig>): LocalWorkPathConfig {
     const ips = BusinessSystemConfig.normalizeIpList(
       config.ips?.length ? config.ips : [config.ip ?? BusinessSystemConfig.DEFAULT_SERVER_IP],
@@ -75,10 +99,8 @@ export class BusinessSystemConfig {
     return {
       ip,
       ips,
-      drive: BusinessSystemConfig.normalizeDrive(
-        String(config.drive ?? BusinessSystemConfig.LOCAL_WORK_PATH.drive),
-      ),
       pathPatterns: BusinessSystemConfig.normalizePathPatterns(config.pathPatterns),
+      archiveTemplatePaths: BusinessSystemConfig.normalizeArchiveTemplatePaths(config.archiveTemplatePaths),
       suggestPathOnMismatch: Boolean(config.suggestPathOnMismatch),
     }
   }
@@ -88,10 +110,6 @@ export class BusinessSystemConfig {
     if (!config.ips.includes(config.ip)) {
       config.ip = config.ips[0]
     }
-  }
-
-  static normalizeDrive(drive: string) {
-    return drive.replace(/:$/, '').trim().toUpperCase()
   }
 
   static normalizeRelativePath(value: string) {
@@ -122,14 +140,14 @@ export class BusinessSystemConfig {
     return trimmed.replace(/\//g, '\\').replace(/^\\+/, '')
   }
 
-  static inferShareLetter(relativePath: string, config = BusinessSystemConfig.LOCAL_WORK_PATH) {
+  static inferShareLetter(relativePath: string) {
     if (relativePath.includes('深化组') || relativePath.includes('加工单归档')) {
       return 'f'
     }
     if (relativePath.includes('设计组')) {
       return 'e'
     }
-    return BusinessSystemConfig.normalizeDrive(config.drive).toLowerCase()
+    return 'f'
   }
 
   static buildFullPath(relativePath: string, config = BusinessSystemConfig.LOCAL_WORK_PATH) {
@@ -141,7 +159,7 @@ export class BusinessSystemConfig {
       return `\\\\${config.ip}\\${sharePrefix[1].toLowerCase()}\\${sharePrefix[2]}`
     }
 
-    const share = BusinessSystemConfig.inferShareLetter(normalized, config)
+    const share = BusinessSystemConfig.inferShareLetter(normalized)
     return `\\\\${config.ip}\\${share}\\${normalized}`
   }
 

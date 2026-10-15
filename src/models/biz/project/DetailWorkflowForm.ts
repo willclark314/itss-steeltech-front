@@ -17,6 +17,7 @@ export type DetailWorkflowAction =
   | 'reopen_plate_layout'
 
 export interface DetailWorkflowRecord {
+  plateLayoutEnabled?: boolean
   modelingStatus: DetailPhaseStatus
   drawingStatus: DetailPhaseStatus
   plateLayoutStatus: DetailPhaseStatus
@@ -33,6 +34,7 @@ export interface DetailWorkflowRecord {
 }
 
 export interface DetailWorkflowEditForm {
+  plateLayoutEnabled: boolean
   modelingStatus: DetailPhaseStatus
   modelingStartedAt: string
   modelingCompletedAt: string
@@ -136,18 +138,19 @@ export class DetailWorkflowForm {
   static readonly DATETIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
 
   static needsDetailWorkflow(natures: readonly ProjectNatureCode[]) {
-    return (
-      natures.includes(ProjectForm.NATURE.DETAIL) ||
-      natures.includes(ProjectForm.NATURE.PLATE_LAYOUT)
-    )
+    return natures.includes(ProjectForm.NATURE.DETAIL)
   }
 
-  static hasPlateLayoutPhase(natures: readonly ProjectNatureCode[]) {
-    return natures.includes(ProjectForm.NATURE.PLATE_LAYOUT)
+  static hasPlateLayoutPhase(
+    workflow: Pick<DetailWorkflowRecord, 'plateLayoutEnabled'> | null | undefined,
+  ) {
+    if (!workflow) return false
+    return workflow.plateLayoutEnabled !== false
   }
 
   static createEditForm(workflow: DetailWorkflowRecord): DetailWorkflowEditForm {
     return {
+      plateLayoutEnabled: workflow.plateLayoutEnabled !== false,
       modelingStatus: workflow.modelingStatus,
       modelingStartedAt: workflow.modelingStartedAt,
       modelingCompletedAt: workflow.modelingCompletedAt,
@@ -165,9 +168,12 @@ export class DetailWorkflowForm {
   }
 
   static getEditablePhaseRows(
-    natures: readonly ProjectNatureCode[],
+    workflow: Pick<
+      DetailWorkflowRecord,
+      'plateLayoutEnabled' | 'plateLayoutStatus'
+    > | null | undefined,
   ): DetailWorkflowPhaseRow[] {
-    const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(natures)
+    const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(workflow)
     const baseStatusOptions: DetailPhaseStatus[] = [
       DetailWorkflowForm.STATUS.NOT_STARTED,
       DetailWorkflowForm.STATUS.IN_PROGRESS,
@@ -204,10 +210,24 @@ export class DetailWorkflowForm {
           : [DetailWorkflowForm.STATUS.NOT_APPLICABLE],
         editable: hasPlateLayout,
         hint: hasPlateLayout
-          ? undefined
-          : '请先在项目性质中勾选「排板」，保存项目后再编辑此阶段。',
+          ? '细化后钢板的排版，与排瓦（墙面板）/排楼承板不同。'
+          : '本项目未启用钢板排板，可在下方开关开启。',
       },
     ]
+  }
+
+  static applyPlateLayoutEnabledChange(
+    form: DetailWorkflowEditForm,
+    enabled: boolean,
+  ) {
+    form.plateLayoutEnabled = enabled
+    if (!enabled) {
+      form.plateLayoutStatus = DetailWorkflowForm.STATUS.NOT_APPLICABLE
+      form.plateLayoutStartedAt = ''
+      form.plateLayoutCompletedAt = ''
+    } else if (form.plateLayoutStatus === DetailWorkflowForm.STATUS.NOT_APPLICABLE) {
+      form.plateLayoutStatus = DetailWorkflowForm.STATUS.NOT_STARTED
+    }
   }
 
   static isMainFlowCompleted(
@@ -284,7 +304,7 @@ export class DetailWorkflowForm {
       return ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DETAIL)
     }
 
-    const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(record.natures)
+    const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(record.detailWorkflow)
     const phase = DetailWorkflowForm.deriveMainPhase(record.detailWorkflow, hasPlateLayout)
     return {
       label: DetailWorkflowForm.MAIN_PHASE_LABELS[phase],
@@ -307,6 +327,33 @@ export class DetailWorkflowForm {
         status === DetailWorkflowForm.STATUS.COMPLETED
     }
     return status === DetailWorkflowForm.STATUS.COMPLETED
+  }
+
+  static buildDrawingTimeSavePayload(
+    workflow: DetailWorkflowRecord,
+    field: 'drawingStartedAt' | 'drawingCompletedAt',
+    value: string,
+  ): DetailWorkflowEditForm {
+    const form = DetailWorkflowForm.createEditForm(workflow)
+    form[field] = value
+    return DetailWorkflowForm.toSavePayload(form)
+  }
+
+  static buildPlateLayoutTimeSavePayload(
+    workflow: DetailWorkflowRecord,
+    field: 'plateLayoutStartedAt' | 'plateLayoutCompletedAt',
+    value: string,
+  ): DetailWorkflowEditForm {
+    const form = DetailWorkflowForm.createEditForm(workflow)
+    form[field] = value
+    return DetailWorkflowForm.toSavePayload(form)
+  }
+
+  static formatWorkflowDatetimeDisplay(value: string | null | undefined) {
+    const text = (value || '').trim()
+    if (!text) return '-'
+    if (text.length >= 16) return text.slice(5, 16)
+    return text
   }
 
   static formatModelWeight(value: number | null | undefined) {

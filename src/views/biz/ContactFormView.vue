@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import '@/styles/biz-data-table.css'
 import '@/styles/biz-page-card.css'
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type UploadFile, type UploadUserFile } from 'element-plus'
 import {
@@ -9,18 +9,32 @@ import {
   createChildContact,
   createContact,
   deleteContact,
+  fetchContact,
   fetchContactList,
   updateContact,
 } from '@/api/contacts'
-import { createProject } from '@/api/projects'
+import { createProject, fetchProjectList } from '@/api/projects'
+import { fetchSystemConfig } from '@/api/system'
 import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
+import { PAGE_SIZE_OPTIONS } from '@/constants/pagination'
 import { useProjectNoLookup } from '@/composables/useProjectNoLookup'
 import { ContactForm } from '@/models/biz/contact'
-import type { ContactAttachment, ContactRecord } from '@/models/biz/contact'
+import type { ContactAttachment, ContactFormType, ContactRecord } from '@/models/biz/contact'
 import { ProjectForm } from '@/models/biz/project'
-import { BIZ_ROUTES, buildProjectRouteQuery } from '@/models/biz/navigation'
+import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
+import { buildProjectRouteQuery, resolveContactPath, resolveProjectLinkFromContact } from '@/models/biz/navigation'
 import ContactFormTable from '@/components/biz/ContactFormTable.vue'
 import TagSelect from '@/components/biz/TagSelect.vue'
+
+const props = withDefaults(
+  defineProps<{
+    /** 页头标题；生产计划「联系单登记」等入口可覆盖 */
+    pageTitle?: string
+  }>(),
+  {
+    pageTitle: '联系单管理',
+  },
+)
 
 const route = useRoute()
 const router = useRouter()
@@ -29,8 +43,16 @@ const tableRef = ref<InstanceType<typeof ContactFormTable>>()
 const highlightedContactId = ref('')
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
+const editingIsChild = ref(false)
+const originalParentId = ref('')
+const originalContactType = ref<ContactFormType>('contact')
+const originalAttachmentIds = ref<string[]>([])
+/** 当前弹窗内记住的正式联系单号（改回联系单时带回） */
+const lastFormalContactId = ref('')
+const removedAttachmentIdsInSession = ref<Set<string>>(new Set())
 const isDraggingPdf = ref(false)
 const attachmentDropTargetId = ref('')
+const primaryPdfDropTargetId = ref('')
 const contactPageRef = ref<HTMLElement | null>(null)
 const dropDialogVisible = ref(false)
 const droppedPdfFiles = ref<File[]>([])
@@ -43,16 +65,27 @@ const childParentRecord = ref<ContactRecord | null>(null)
 const childFormRef = ref<FormInstance>()
 const childForm = reactive(ContactForm.createEmptyChildForm())
 const childDroppedFiles = ref<File[]>([])
+const projectCreateDialogVisible = ref(false)
+const projectCreateFormRef = ref<FormInstance>()
+const projectCreateContact = ref<ContactRecord | null>(null)
+const projectCreateSubmitting = ref(false)
+const projectCreateForm = reactive({
+  projectNo: '',
+  name: '',
+  plannedStartDate: '',
+})
+const projectCreateFormRules = {
+  projectNo: ProjectForm.FORM_RULES.projectNo,
+  name: ProjectForm.FORM_RULES.name,
+}
 
 const dialogTitle = computed(() => (editingId.value ? '编辑联系单' : '新建联系单'))
 
 const searchForm = reactive({
   keyword: '',
-  status: '',
   tags: [] as string[],
 })
 
-const statusOptions = ContactForm.STATUS_OPTIONS
 const relationTypeMap = ContactForm.RELATION_TYPE_MAP
 const relationTypeOptions = ContactForm.RELATION_TYPE_OPTIONS
 const contactFormTypeOptions = ContactForm.FORM_TYPE_OPTIONS
@@ -63,8 +96,8 @@ const knownExactProjectNos = projectNoLookup.exact
 const appendSearchResults = ref<ContactRecord[]>([])
 
 // ── 分页列表（按筛选条件分桶缓存，切换筛选时保留已查数据）──
-const pageSize = 20
 const {
+  pageSize,
   filteredData,
   total,
   page,
@@ -75,17 +108,15 @@ const {
   patchItem,
   getFilters,
 } = usePaginatedListCache<ContactRecord>({
-  pageSize,
   getItemKey: (item) => item.id,
   sortList: ContactForm.sortForDisplay,
 })
 
-type PaginatedFilters = { keyword?: string; status?: string; tags?: string[] }
+type PaginatedFilters = { keyword?: string; tags?: string[] }
 
 function buildListQuery(params: PaginatedFilters & { page?: number; pageSize?: number; anchor?: string }) {
   return {
     keyword: params.keyword,
-    status: params.status,
     tags: params.tags,
     page: params.page,
     pageSize: params.pageSize,
@@ -114,22 +145,56 @@ async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters, 
 const formRef = ref<FormInstance>()
 const form = reactive(ContactForm.createEmptyForm())
 
-const formRules = computed(() => (editingId.value ? ContactForm.EDIT_FORM_RULES : ContactForm.FORM_RULES))
+const formRules = computed(() => {
+  if (form.contactType === 'processing') {
+    return editingId.value ? ContactForm.PROCESSING_EDIT_FORM_RULES : ContactForm.PROCESSING_FORM_RULES
+  }
+  return editingId.value ? ContactForm.EDIT_FORM_RULES : ContactForm.FORM_RULES
+})
+const childFormRules = computed(() =>
+  childForm.contactType === 'processing'
+    ? ContactForm.PROCESSING_FORM_RULES
+    : ContactForm.CHILD_FORM_RULES,
+)
 
 const appendTargetOptions = computed(() => appendSearchResults.value)
 
 const selectedAppendTarget = computed(() =>
   appendSearchResults.value.find((item) => item.id === appendTargetId.value) ?? null,
 )
-const showPageDropOverlay = computed(
-  () => isDraggingPdf.value && !attachmentDropTargetId.value,
+const selectedEditParent = computed(() =>
+  appendSearchResults.value.find((item) => item.id === form.parentId) ?? null,
+)
+const editParentOptions = computed(() =>
+  appendSearchResults.value.filter((item) => item.id !== editingId.value),
+)
+const isEditingAppend = computed(() => Boolean(editingId.value) && form.linkage === 'append')
+const isAnyDialogOpen = computed(
+  () =>
+    dialogVisible.value ||
+    childDialogVisible.value ||
+    dropDialogVisible.value ||
+    projectCreateDialogVisible.value,
 )
 
-function openCreateDialogWithAttachments(files: File[]) {
+const showPageDropOverlay = computed(
+  () =>
+    isDraggingPdf.value &&
+    !isAnyDialogOpen.value &&
+    !attachmentDropTargetId.value &&
+    !primaryPdfDropTargetId.value,
+)
+
+async function openCreateDialogWithAttachments(files: File[]) {
   editingId.value = null
   resetForm()
-  form.primaryPdfList = ContactForm.filesToAttachmentList(files.slice(0, 1))
-  form.attachmentList = ContactForm.filesToAttachmentList(files.slice(1))
+  try {
+    form.primaryPdfList = await ContactForm.filesToAttachmentList(files.slice(0, 1))
+    form.attachmentList = await ContactForm.filesToAttachmentList(files.slice(1))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法读取所选文件')
+    return
+  }
 
   const firstName = files[0]?.name.replace(/\.pdf$/i, '') || ''
   if (firstName) {
@@ -139,14 +204,22 @@ function openCreateDialogWithAttachments(files: File[]) {
   dialogVisible.value = true
 }
 
-function openChildDialog(parent: ContactRecord, files: File[] = []) {
+async function openChildDialog(parent: ContactRecord, files: File[] = []) {
   childParentId.value = parent.id
   childParentRecord.value = parent
   Object.assign(childForm, ContactForm.createEmptyChildForm(parent))
   childDroppedFiles.value = files
-  childForm.primaryPdfList = ContactForm.filesToAttachmentList(files.slice(0, 1))
+  try {
+    childForm.primaryPdfList = await ContactForm.filesToAttachmentList(files.slice(0, 1))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法读取所选文件')
+    childForm.primaryPdfList = []
+  }
   const firstName = files[0]?.name.replace(/\.pdf$/i, '') || ''
-  if (firstName) childForm.title = firstName
+  if (firstName) {
+    childForm.title = firstName
+    if (!childForm.id) childForm.id = firstName
+  }
   childDialogVisible.value = true
 }
 
@@ -168,15 +241,21 @@ function hasFileDrag(event: DragEvent) {
 function resetDragState() {
   isDraggingPdf.value = false
   attachmentDropTargetId.value = ''
+  primaryPdfDropTargetId.value = ''
 }
 
 function handlePageDragEnter(event: DragEvent) {
   event.preventDefault()
+  if (isAnyDialogOpen.value) return
   if (!hasFileDrag(event)) return
   isDraggingPdf.value = true
 }
 
 function handlePageDragLeave(event: DragEvent) {
+  if (isAnyDialogOpen.value) {
+    resetDragState()
+    return
+  }
   const pageEl = contactPageRef.value
   const related = event.relatedTarget as Node | null
   if (related && pageEl?.contains(related)) return
@@ -204,6 +283,7 @@ function handleWindowDragLeave(event: DragEvent) {
 
 function handlePageDragOver(event: DragEvent) {
   event.preventDefault()
+  if (isAnyDialogOpen.value) return
 }
 
 let appendSearchTimer: ReturnType<typeof setTimeout> | undefined
@@ -231,6 +311,28 @@ function filterAppendTargets(query: string) {
   }, 300)
 }
 
+function formatContactOptionLabel(record: ContactRecord) {
+  return ContactForm.formatOptionLabel(record)
+}
+
+async function seedEditParentOption(parentId: string) {
+  const existing =
+    appendSearchResults.value.find((item) => item.id === parentId) ||
+    filteredData.value.find((item) => item.id === parentId)
+  if (existing) {
+    if (!appendSearchResults.value.some((item) => item.id === existing.id)) {
+      appendSearchResults.value = [existing, ...appendSearchResults.value]
+    }
+    return
+  }
+  try {
+    const parent = await fetchContact(parentId)
+    appendSearchResults.value = [parent, ...appendSearchResults.value.filter((item) => item.id !== parent.id)]
+  } catch {
+    // 主单可能已不在列表中，仍保留 parentId 供保存时由后端校验
+  }
+}
+
 function resolveAppendTargetId() {
   if (appendTargetId.value) return appendTargetId.value
 
@@ -241,17 +343,34 @@ function resolveAppendTargetId() {
   const exactId = appendSearchResults.value.find((item) => item.id.toLowerCase() === normalizedQuery)
   if (exactId) return exactId.id
 
+  const processingByProject = appendSearchResults.value.find(
+    (item) =>
+      ContactForm.isProcessingFormId(item.id) &&
+      item.projectNos?.some(
+        (no) => ContactForm.parseBaseProjectNo(no).toLowerCase() === normalizedQuery,
+      ),
+  )
+  if (processingByProject) return processingByProject.id
+
   const matches = ContactForm.findByKeyword(appendSearchResults.value, query)
   if (matches.length === 1) return matches[0]!.id
 
   return ''
 }
 
-function openDropDialog(files: File[]) {
+type DropDialogOptions = {
+  action?: 'create' | 'append_attachment' | 'append_contact'
+  target?: ContactRecord
+}
+
+function openDropDialog(files: File[], options?: DropDialogOptions) {
   droppedPdfFiles.value = files
-  dropAction.value = 'create'
-  appendTargetId.value = ''
+  dropAction.value = options?.action ?? 'create'
+  appendTargetId.value = options?.target?.id ?? ''
   appendSearchQuery.value = ''
+  if (options?.target && !appendSearchResults.value.some((item) => item.id === options.target!.id)) {
+    appendSearchResults.value = [options.target, ...appendSearchResults.value]
+  }
   dropDialogVisible.value = true
 }
 
@@ -297,7 +416,7 @@ async function handleDropDialogConfirm() {
 
   const target = await resolveAppendTarget()
   if (!target) {
-    ElMessage.warning('请选择或输入单号、项目号、联系主题以定位联系单')
+    ElMessage.warning('请选择或输入单号、项目号、联系主题以定位联系单（加工单可用项目号）')
     return
   }
 
@@ -323,38 +442,36 @@ async function handleDropDialogConfirm() {
 async function handlePageDrop(event: DragEvent) {
   event.preventDefault()
   resetDragState()
+  if (isAnyDialogOpen.value) return
 
-  const pdfFiles = ContactForm.extractPdfFilesFromDrop(event.dataTransfer!)
-  if (!pdfFiles.length) {
-    ElMessage.warning('请拖入 PDF 文件')
+  const files = ContactForm.extractFilesFromDrop(event.dataTransfer!)
+  if (!files.length) {
+    ElMessage.warning('请拖入文件')
     return
   }
 
-  openDropDialog(pdfFiles)
+  openDropDialog(files)
 }
 
-function handleAttachmentDrop(row: ContactRecord, pdfFiles: File[]) {
+async function handleAttachmentDrop(row: ContactRecord, files: File[]) {
   resetDragState()
 
-  if (!pdfFiles.length) {
-    ElMessage.warning('请拖入 PDF 文件')
+  if (!files.length) {
+    ElMessage.warning('请拖入文件')
     return
   }
 
-  const fileLabel =
-    pdfFiles.length === 1 ? `「${pdfFiles[0]!.name}」` : `${pdfFiles.length} 个 PDF 文件`
+  const fileLabel = files.length === 1
+    ? `「${files[0]!.name}」`
+    : `${files.length} 个文件`
 
-  void confirmAttachmentDrop(row, pdfFiles, fileLabel)
-}
-
-async function confirmAttachmentDrop(row: ContactRecord, pdfFiles: File[], fileLabel: string) {
   try {
     await ElMessageBox.confirm(
-      `是否将 ${fileLabel} 追加到联系单「${row.id} · ${row.title}」？`,
-      '追加 PDF',
+      `是否将${fileLabel}追加为联系单「${row.id} · ${row.title}」的附件？`,
+      '追加附件',
       {
         type: 'info',
-        confirmButtonText: '追加',
+        confirmButtonText: '追加附件',
         cancelButtonText: '取消',
       },
     )
@@ -363,7 +480,7 @@ async function confirmAttachmentDrop(row: ContactRecord, pdfFiles: File[], fileL
   }
 
   try {
-    const payloads = await ContactForm.filesToUploadPayload(pdfFiles)
+    const payloads = await ContactForm.filesToUploadPayload(files)
     const updated = await appendContactAttachments(row.id, payloads)
     patchItem(row.id, () => updated)
     ElMessage.success(`附件已追加到联系单 ${row.id}`)
@@ -372,39 +489,88 @@ async function confirmAttachmentDrop(row: ContactRecord, pdfFiles: File[], fileL
   }
 }
 
-function handleAttachmentChange(file: UploadFile, fileList: UploadUserFile[]) {
-  if (!ContactForm.isPdfFile(file)) {
-    ElMessage.warning('仅支持上传 PDF 文件')
-    form.attachmentList = fileList.filter((item) => item.uid !== file.uid)
+function handlePrimaryPdfInvalidDrop() {
+  resetDragState()
+  ElMessage.warning('正文列仅支持 PDF 文件')
+}
+
+async function handlePrimaryPdfDrop(row: ContactRecord, file: File) {
+  resetDragState()
+
+  const hadPrimary = !!row.primaryPdf?.url
+  const actionLabel = hadPrimary ? '上传新版本' : '上传正文'
+
+  try {
+    await ElMessageBox.confirm(
+      `是否将「${file.name}」${actionLabel}到联系单「${row.id} · ${row.title}」？`,
+      actionLabel,
+      {
+        type: 'info',
+        confirmButtonText: actionLabel,
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
     return
   }
-  form.attachmentList = fileList
+
+  try {
+    const [payload] = await ContactForm.filesToUploadPayload([file])
+    const updated = await updateContact(row.id, { primaryPdf: payload })
+    patchItem(row.id, () => updated)
+    ElMessage.success(`正文 PDF 已${hadPrimary ? '更新' : '上传'}到联系单 ${row.id}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '上传正文 PDF 失败')
+  }
 }
 
-function handleAttachmentRemove(_file: UploadFile, fileList: UploadUserFile[]) {
-  form.attachmentList = fileList
+async function handleAttachmentChange(_file: UploadFile, fileList: UploadUserFile[]) {
+  try {
+    form.attachmentList = await ContactForm.snapshotUploadFiles(fileList)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法读取所选文件')
+    form.attachmentList = fileList.filter((item) => item.uid !== _file.uid)
+  }
 }
 
-function handlePrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
+function handleAttachmentRemove(file: UploadFile, fileList: UploadUserFile[]) {
+  const attachmentId = ContactForm.getAttachmentIdFromUploadFile(file)
+  if (attachmentId) {
+    removedAttachmentIdsInSession.value.add(attachmentId)
+  }
+  form.attachmentList = [...fileList]
+}
+
+async function handlePrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
   if (!ContactForm.isPdfFile(file)) {
     ElMessage.warning('仅支持上传 PDF 文件')
     form.primaryPdfList = fileList.filter((item) => item.uid !== file.uid)
     return
   }
-  form.primaryPdfList = fileList.slice(-1)
+  try {
+    form.primaryPdfList = await ContactForm.snapshotUploadFiles(fileList.slice(-1))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法读取所选文件')
+    form.primaryPdfList = []
+  }
 }
 
 function handlePrimaryPdfRemove(_file: UploadFile, fileList: UploadUserFile[]) {
   form.primaryPdfList = fileList
 }
 
-function handleChildPrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
+async function handleChildPrimaryPdfChange(file: UploadFile, fileList: UploadUserFile[]) {
   if (!ContactForm.isPdfFile(file)) {
     ElMessage.warning('仅支持上传 PDF 文件')
     childForm.primaryPdfList = fileList.filter((item) => item.uid !== file.uid)
     return
   }
-  childForm.primaryPdfList = fileList.slice(-1)
+  try {
+    childForm.primaryPdfList = await ContactForm.snapshotUploadFiles(fileList.slice(-1))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '无法读取所选文件')
+    childForm.primaryPdfList = []
+  }
 }
 
 function handleChildPrimaryPdfRemove(_file: UploadFile, fileList: UploadUserFile[]) {
@@ -419,7 +585,7 @@ function openAttachment(file: ContactAttachment) {
 
 function goToProject(projectNo: string, projectNos: string[] = []) {
   router.push({
-    path: BIZ_ROUTES.project,
+    path: resolveProjectLinkFromContact(route.path),
     query: buildProjectRouteQuery(projectNo, projectNos),
   })
 }
@@ -437,23 +603,63 @@ async function syncKnownProjectNosFromContacts() {
   await projectNoLookup.sync(projectNos)
 }
 
-async function createLinkedProject(projectNo: string, row: ContactRecord) {
-  const draft = ProjectForm.createFromContact(projectNo, {
+function openProjectCreateDialog(projectNo: string, row: ContactRecord) {
+  const draft = ProjectForm.createFormFromContact(projectNo, {
     contactFormId: row.id,
     contactTitle: row.title,
     receivedDate: row.receivedDate,
     plannedStartDate: row.receivedDate,
   })
-  const created = await createProject({
-    projectNo: draft.projectNo,
-    name: draft.name,
-    status: draft.status,
-    plannedStartDate: draft.plannedStartDate,
-    contactFormId: row.id,
-  })
-  projectNoLookup.markCreated(projectNo, created.projectNo)
-  ElMessage.success(`项目 ${projectNo} 已创建并关联联系单`)
-  goToProject(created.projectNo, [...new Set([...row.projectNos, created.projectNo])])
+  projectCreateContact.value = row
+  projectCreateForm.projectNo = draft.projectNo
+  projectCreateForm.name = draft.name
+  projectCreateForm.plannedStartDate = draft.plannedStartDate
+  projectCreateDialogVisible.value = true
+  nextTick(() => projectCreateFormRef.value?.clearValidate())
+}
+
+/** 检查联系单里是否有未入库的项目号，有则弹出新建项目对话框（取第一个） */
+function tryOpenProjectCreateForContact(contact: ContactRecord) {
+  const unknown = contact.projectNos.find((no) => !knownProjectNos.value.has(no))
+  if (unknown) {
+    openProjectCreateDialog(unknown, contact)
+  }
+}
+
+function handleProjectCreateDialogClosed() {
+  projectCreateContact.value = null
+  projectCreateForm.projectNo = ''
+  projectCreateForm.name = ''
+  projectCreateForm.plannedStartDate = ''
+  projectCreateFormRef.value?.clearValidate()
+}
+
+async function submitProjectCreate() {
+  const row = projectCreateContact.value
+  if (!row) return
+
+  const valid = await projectCreateFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+
+  const sourceProjectNo = projectCreateForm.projectNo.trim()
+  projectCreateSubmitting.value = true
+  try {
+    const created = await createProject({
+      projectNo: sourceProjectNo,
+      name: projectCreateForm.name.trim(),
+      status: ProjectForm.STATUS.ACTIVE,
+      plannedStartDate: projectCreateForm.plannedStartDate || undefined,
+      contactFormId: row.id,
+    })
+    projectNoLookup.markCreated(sourceProjectNo, created.projectNo)
+    projectCreateDialogVisible.value = false
+    ElMessage.success(`项目 ${sourceProjectNo} 已创建并关联联系单`)
+    goToProject(created.projectNo, [...new Set([...row.projectNos, created.projectNo])])
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '新建项目失败')
+  } finally {
+    projectCreateSubmitting.value = false
+  }
 }
 
 async function handleProjectNoClick(projectNo: string, row: ContactRecord) {
@@ -462,11 +668,7 @@ async function handleProjectNoClick(projectNo: string, row: ContactRecord) {
   )
 
   if (hasDirectLink && !hasExactProjectNo(projectNo)) {
-    try {
-      await createLinkedProject(projectNo, row)
-    } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '创建项目失败')
-    }
+    openProjectCreateDialog(projectNo, row)
     return
   }
 
@@ -489,11 +691,7 @@ async function handleProjectNoClick(projectNo: string, row: ContactRecord) {
     return
   }
 
-  try {
-    await createLinkedProject(projectNo, row)
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '新建项目失败')
-  }
+  openProjectCreateDialog(projectNo, row)
 }
 
 async function loadContacts(force = false) {
@@ -502,12 +700,11 @@ async function loadContacts(force = false) {
       1,
       {
         keyword: searchForm.keyword,
-        status: searchForm.status,
         tags: searchForm.tags.length ? [...searchForm.tags] : undefined,
       },
       force,
     )
-    await syncKnownProjectNosFromContacts()
+    void syncKnownProjectNosFromContacts()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载联系单数据失败')
   }
@@ -518,7 +715,18 @@ async function handlePageChange(nextPage: number) {
     await loadPage(nextPage, getFilters())
     highlightedContactId.value = ''
     nextTick(() => tableRef.value?.tableRef?.setScrollTop(0))
-    await syncKnownProjectNosFromContacts()
+    void syncKnownProjectNosFromContacts()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载联系单数据失败')
+  }
+}
+
+async function handleSizeChange() {
+  try {
+    await loadPage(1, getFilters())
+    highlightedContactId.value = ''
+    nextTick(() => tableRef.value?.tableRef?.setScrollTop(0))
+    void syncKnownProjectNosFromContacts()
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载联系单数据失败')
   }
@@ -526,18 +734,17 @@ async function handlePageChange(nextPage: number) {
 
 async function handleSearch() {
   if (route.query.contactId) {
-    router.replace({ path: BIZ_ROUTES.contact })
+    router.replace({ path: resolveContactPath(route.path) })
   }
   await loadContacts(true)
 }
 
 async function handleReset() {
   searchForm.keyword = ''
-  searchForm.status = ''
   searchForm.tags = []
   highlightedContactId.value = ''
   if (route.query.contactId) {
-    router.replace({ path: BIZ_ROUTES.contact })
+    router.replace({ path: resolveContactPath(route.path) })
   }
   await loadContacts(false)
 }
@@ -555,11 +762,10 @@ async function applyContactIdFromRoute() {
 
   if (typeof contactId === 'string' && contactId) {
     searchForm.keyword = ''
-    searchForm.status = ''
-    highlightedContactId.value = contactId
+      highlightedContactId.value = contactId
     try {
       await loadAroundAnchor(contactId, {})
-      await syncKnownProjectNosFromContacts()
+      void syncKnownProjectNosFromContacts()
       nextTick(() => scrollToContact(contactId))
     } catch (error) {
       ElMessage.error(error instanceof Error ? error.message : '加载联系单数据失败')
@@ -576,6 +782,10 @@ watch(
     void applyContactIdFromRoute()
   },
 )
+
+watch(isAnyDialogOpen, (open) => {
+  if (open) resetDragState()
+})
 
 onMounted(async () => {
   if (route.query.contactId) {
@@ -596,13 +806,36 @@ onUnmounted(() => {
 
 function openCreateDialog() {
   editingId.value = null
+  editingIsChild.value = false
+  originalParentId.value = ''
+  originalContactType.value = 'contact'
+  originalAttachmentIds.value = []
+  lastFormalContactId.value = ''
+  removedAttachmentIdsInSession.value = new Set()
   resetForm()
   dialogVisible.value = true
 }
 
-function openEditDialog(row: ContactRecord) {
+async function openEditDialog(row: ContactRecord) {
   editingId.value = row.id
+  editingIsChild.value =
+    Boolean(row.parentId) || (row.relationType != null && row.relationType !== 'primary')
+  originalParentId.value = row.parentId || ''
+  originalAttachmentIds.value = (row.attachments || []).map((item) => item.id)
+  removedAttachmentIdsInSession.value = new Set()
   Object.assign(form, ContactForm.createFormFromRecord(row))
+  originalContactType.value = form.contactType
+  const projectKey = ContactForm.resolveRememberProjectKey(row.projectNos, row.id)
+  if (ContactForm.isProcessingFormId(row.id)) {
+    lastFormalContactId.value = ContactForm.loadRememberedContactId(projectKey)
+  } else {
+    lastFormalContactId.value = row.id
+    if (projectKey) ContactForm.saveRememberedContactId(projectKey, row.id)
+  }
+  appendSearchQuery.value = ''
+  if (form.parentId) {
+    await seedEditParentOption(form.parentId)
+  }
   dialogVisible.value = true
 }
 
@@ -613,20 +846,168 @@ function resetForm() {
 
 function handleDialogClose() {
   editingId.value = null
+  editingIsChild.value = false
+  originalParentId.value = ''
+  originalContactType.value = 'contact'
+  originalAttachmentIds.value = []
+  lastFormalContactId.value = ''
+  removedAttachmentIdsInSession.value = new Set()
   resetForm()
 }
 
-function handleContactTypeChange(nextType: 'contact' | 'processing') {
+function handleLinkageChange(nextType: string | number | boolean | undefined) {
+  if (nextType === 'independent') {
+    form.parentId = ''
+    form.relationType = 'primary'
+    return
+  }
+  if (nextType === 'append') {
+    if (!form.relationType || form.relationType === 'primary') {
+      form.relationType = 'supplement'
+    }
+  }
+}
+
+function rememberFormalContactId(candidate: string) {
+  const formalId = (candidate || '').trim()
+  if (!formalId || ContactForm.isProcessingFormId(formalId)) return
+  lastFormalContactId.value = formalId
+  const projectKey = ContactForm.resolveRememberProjectKey(form.projectNos, editingId.value || undefined)
+  if (projectKey) ContactForm.saveRememberedContactId(projectKey, formalId)
+}
+
+function resolveRememberedFormalContactId() {
+  const fromSession = (lastFormalContactId.value || '').trim()
+  if (fromSession && !ContactForm.isProcessingFormId(fromSession)) return fromSession
+  const projectKey = ContactForm.resolveRememberProjectKey(form.projectNos, editingId.value || undefined)
+  return ContactForm.loadRememberedContactId(projectKey)
+}
+
+function handleContactTypeChange(nextType: string | number | boolean | undefined) {
+  if (nextType !== 'contact' && nextType !== 'processing') return
+
   if (nextType === 'processing') {
     const currentId = (form.id || '').trim()
-    if (!currentId || /^DTP\d+$/i.test(currentId)) {
+    if (currentId && !ContactForm.isProcessingFormId(currentId)) {
+      rememberFormalContactId(currentId)
+    } else if (editingId.value && !ContactForm.isProcessingFormId(editingId.value)) {
+      rememberFormalContactId(editingId.value)
+    }
+    if (!currentId || /^DTP\d+$/i.test(currentId) || ContactForm.isProcessingFormId(currentId)) {
       form.id = ContactForm.JIAGONGDAN_DEFAULT_ID
     }
+    ElMessage.info(
+      '改为「加工单」后，关联项目归档将按「加工单归档」规则；保存后请到项目列表查看路径提示，必要时重新创建路径。',
+    )
     return
   }
 
-  if ((form.id || '').trim() === ContactForm.JIAGONGDAN_DEFAULT_ID) {
-    form.id = ''
+  const restored = resolveRememberedFormalContactId()
+  const currentId = (form.id || '').trim()
+  if (!currentId || ContactForm.isProcessingFormId(currentId)) {
+    form.id = restored
+  }
+  ElMessage.info(
+    restored
+      ? `已带出上次联系单号「${restored}」；关联项目归档将按「深化组归档」规则，保存后请到项目列表核对路径。`
+      : '改为「联系单」后请填写正式联系单号；关联项目归档将按「深化组归档」规则，保存后请到项目列表核对路径。',
+  )
+}
+
+function handleChildContactTypeChange(nextType: string | number | boolean | undefined) {
+  if (nextType !== 'contact' && nextType !== 'processing') return
+
+  if (nextType === 'processing') {
+    const currentId = (childForm.id || '').trim()
+    if (!currentId || /^DTP\d+$/i.test(currentId) || ContactForm.isProcessingFormId(currentId)) {
+      childForm.id = ContactForm.JIAGONGDAN_DEFAULT_ID
+    }
+    ElMessage.info(
+      '追加单改为「加工单」后，可能影响关联项目的归档路径类别，保存后请到项目列表核对。',
+    )
+    return
+  }
+
+  if (ContactForm.isProcessingFormId((childForm.id || '').trim())) {
+    childForm.id = ''
+  }
+}
+
+async function notifyArchivePathImpact(projectNos: string[], nextType: ContactFormType) {
+  const uniqueNos = [...new Set(projectNos.map((no) => no.trim()).filter(Boolean))]
+  if (!uniqueNos.length) return
+
+  try {
+    const config = await fetchSystemConfig()
+    const patterns = config.localWorkPath.pathPatterns
+    const kindLabel = nextType === 'processing' ? '加工单归档' : '深化组归档'
+    const blocks: ReturnType<typeof h>[] = [
+      h(
+        'p',
+        { class: 'path-suggest-dialog__reason' },
+        `联系单类型已变为「${nextType === 'processing' ? '加工单' : '联系单'}」。关联项目的归档类别按「${kindLabel}」计算；若已设置路径与建议不一致，请到项目列表悬停查看，并右键「创建路径」。`,
+      ),
+    ]
+
+    let mismatchCount = 0
+    for (const projectNo of uniqueNos.slice(0, 8)) {
+      const result = await fetchProjectList({ keyword: projectNo, page: 1, pageSize: 20 })
+      const project =
+        result.list.find((item) => item.projectNo === projectNo) ||
+        result.list.find(
+          (item) =>
+            ProjectForm.parseBaseProjectNo(item.projectNo) ===
+            ProjectForm.parseBaseProjectNo(projectNo),
+        )
+      if (!project) continue
+
+      const natures = project.natures || []
+      const touchesDetail =
+        natures.includes(ProjectForm.NATURE.DETAIL) ||
+        ProjectForm.DETAIL_GROUP_NATURES.some((n) => natures.includes(n)) ||
+        Boolean(ProjectForm.hasLocalWorkPath(project.detailWorkPath)) ||
+        natures.length === 0
+      if (!touchesDetail) continue
+
+      const saved = ProjectForm.normalizeLocalWorkPath(
+        ProjectWorkPath.getNaturePath(project, 'detail'),
+      )
+      const suggested = ProjectWorkPath.buildRelativePath(project, patterns, 'detail') ?? ''
+      const mismatch =
+        ProjectWorkPath.isDetailArchiveKindMismatch(project, saved) ||
+        (Boolean(saved) && Boolean(suggested) && saved !== suggested) ||
+        (!saved && Boolean(suggested))
+
+      if (!mismatch) continue
+      mismatchCount += 1
+      blocks.push(
+        h('div', { class: 'path-suggest-dialog__block' }, [
+          h('div', { class: 'path-suggest-dialog__label' }, `项目 ${project.projectNo}`),
+          h('div', { class: 'path-suggest-dialog__path-sub' }, `已设置：${saved || '（未设置）'}`),
+          h(
+            'div',
+            { class: 'path-suggest-dialog__path-sub' },
+            `建议（${kindLabel}）：${suggested || '（无法生成）'}`,
+          ),
+        ]),
+      )
+    }
+
+    if (!mismatchCount) {
+      ElMessage.success(
+        `已保存。关联项目将按「${kindLabel}」识别；当前已设置路径与建议一致，或尚未设置细化路径。`,
+      )
+      return
+    }
+
+    await ElMessageBox.alert(h('div', { class: 'path-suggest-dialog' }, blocks), '归档路径提示', {
+      confirmButtonText: '知道了',
+      customClass: 'path-suggest-message-box',
+    })
+  } catch {
+    ElMessage.warning(
+      '已保存。联系单类型变更可能影响项目归档路径，请到项目列表悬停本地路径查看提示。',
+    )
   }
 }
 
@@ -638,7 +1019,6 @@ async function handleSubmit() {
     if (editingId.value) {
       const oldId = editingId.value
       const updatePayload: Parameters<typeof updateContact>[1] = {
-        id: form.id?.trim() ?? '',
         title: form.title,
         receivedDate: form.receivedDate,
         urgency: form.urgency,
@@ -646,13 +1026,73 @@ async function handleSubmit() {
         projectNos: [...form.projectNos],
         tagIds: [...form.tagIds],
       }
+      if (form.contactType === 'processing') {
+        // 编辑时改为加工单：后端会把普通单号重命名为 加工单-{项目号}，并重算项目 isJiagongdan
+        if (!ContactForm.isProcessingFormId(oldId)) {
+          updatePayload.id = ContactForm.JIAGONGDAN_DEFAULT_ID
+        }
+      } else {
+        const nextId = form.id?.trim() ?? ''
+        if (!nextId) {
+          ElMessage.warning('请填写联系单号')
+          return
+        }
+        if (ContactForm.isProcessingFormId(nextId)) {
+          ElMessage.warning('联系单号不能使用加工单格式，请填写正式联系单号')
+          return
+        }
+        // 加工单 → 联系单：必须带上新单号，后端才会把 加工单-{项目号} 改写掉
+        updatePayload.id = nextId
+      }
+      if (form.linkage === 'append') {
+        const parentId = form.parentId?.trim() ?? ''
+        if (!parentId) {
+          ElMessage.warning('请选择要追加到的主单')
+          return
+        }
+        if (parentId === oldId || parentId === (form.id?.trim() ?? '')) {
+          ElMessage.warning('不能将联系单追加到自身')
+          return
+        }
+        updatePayload.parentId = parentId
+        updatePayload.relationType = form.relationType && form.relationType !== 'primary' ? form.relationType : 'supplement'
+      } else if (originalParentId.value || editingIsChild.value) {
+        updatePayload.parentId = ''
+      }
       if (ContactForm.hasNewPrimaryUpload(form.primaryPdfList)) {
         const primaryFiles = await ContactForm.uploadFilesFromList(form.primaryPdfList)
         updatePayload.primaryPdf = primaryFiles[0]
       }
+      const remainingAttachmentIds = ContactForm.getRemainingAttachmentIds(form.attachmentList)
+      const removedAttachmentIds = ContactForm.getRemovedAttachmentIds(
+        originalAttachmentIds.value,
+        remainingAttachmentIds,
+        removedAttachmentIdsInSession.value,
+      )
+      const newAttachmentFiles = ContactForm.getNewAttachmentFiles(form.attachmentList)
+      const attachmentChanged =
+        removedAttachmentIds.length > 0 || newAttachmentFiles.length > 0
+      if (removedAttachmentIds.length) {
+        updatePayload.removedAttachmentIds = removedAttachmentIds
+      }
+      if (newAttachmentFiles.length) {
+        updatePayload.supplementFiles = await ContactForm.uploadFilesFromList(newAttachmentFiles)
+      }
       const updated = await updateContact(oldId, updatePayload)
-      if (oldId !== updated.id) {
-        if (highlightedContactId.value === oldId) {
+      const projectKey = ContactForm.resolveRememberProjectKey(
+        updated.projectNos || form.projectNos,
+        updated.id,
+      )
+      if (form.contactType === 'contact') {
+        rememberFormalContactId(updated.id)
+      } else if (!ContactForm.isProcessingFormId(oldId)) {
+        rememberFormalContactId(oldId)
+      } else if (lastFormalContactId.value && projectKey) {
+        ContactForm.saveRememberedContactId(projectKey, lastFormalContactId.value)
+      }
+      const linkageChanged = 'parentId' in updatePayload
+      if (oldId !== updated.id || attachmentChanged || linkageChanged) {
+        if (highlightedContactId.value === oldId && oldId !== updated.id) {
           highlightedContactId.value = updated.id
         }
         const activeFilters = getFilters()
@@ -662,12 +1102,20 @@ async function handleSubmit() {
         patchItem(oldId, () => updated)
       }
       await syncKnownProjectNosFromContacts()
-      ElMessage.success('联系单已更新')
+      const typeChanged = originalContactType.value !== form.contactType
+      if (typeChanged || form.contactType === 'processing') {
+        await notifyArchivePathImpact([...form.projectNos], form.contactType)
+      } else {
+        ElMessage.success('联系单已更新')
+      }
     } else {
       const primaryFiles = await ContactForm.uploadFilesFromList(form.primaryPdfList)
       const supplementFiles = await ContactForm.uploadFilesFromList(form.attachmentList)
-      await createContact({
-        id: form.id?.trim() || undefined,
+      const created = await createContact({
+        id:
+          form.contactType === 'processing'
+            ? ContactForm.JIAGONGDAN_DEFAULT_ID
+            : form.id?.trim() || undefined,
         title: form.title,
         receivedDate: form.receivedDate,
         urgency: form.urgency,
@@ -677,11 +1125,25 @@ async function handleSubmit() {
         primaryPdf: primaryFiles[0],
         supplementFiles,
       })
+      if (form.contactType === 'contact') {
+        rememberFormalContactId(created.id)
+      } else if (lastFormalContactId.value) {
+        const projectKey = ContactForm.resolveRememberProjectKey(created.projectNos, created.id)
+        if (projectKey) ContactForm.saveRememberedContactId(projectKey, lastFormalContactId.value)
+      }
       const activeFilters = getFilters()
       clearFilterCache(activeFilters)
       await loadPage(1, activeFilters, true)
+      await projectNoLookup.sync(created.projectNos)
       await syncKnownProjectNosFromContacts()
-      ElMessage.success('联系单已提交')
+      if (form.contactType === 'processing') {
+        await notifyArchivePathImpact([...created.projectNos], 'processing')
+      } else {
+        ElMessage.success('联系单已提交')
+      }
+      dialogVisible.value = false
+      tryOpenProjectCreateForContact(created)
+      return
     }
     dialogVisible.value = false
   } catch (error) {
@@ -696,6 +1158,10 @@ async function handleChildSubmit() {
   try {
     const primaryFiles = await ContactForm.uploadFilesFromList(childForm.primaryPdfList)
     const created = await createChildContact(childParentId.value, {
+      id:
+        childForm.contactType === 'processing'
+          ? ContactForm.JIAGONGDAN_DEFAULT_ID
+          : childForm.id?.trim() || undefined,
       title: childForm.title,
       receivedDate: childForm.receivedDate,
       urgency: childForm.urgency,
@@ -726,7 +1192,11 @@ async function handleChildSubmit() {
   }
 }
 
-async function handleStatusUpdated(contact: ContactRecord) {
+async function handleCreatedAtUpdated(contact: ContactRecord) {
+  patchItem(contact.id, () => contact)
+}
+
+async function handleReceivedDateUpdated(contact: ContactRecord) {
   patchItem(contact.id, () => contact)
 }
 
@@ -746,7 +1216,7 @@ async function handleCancel(row: ContactRecord) {
   }
 
   try {
-    const updated = await updateContact(row.id, { status: 'cancelled' })
+    const updated = await updateContact(row.id, {})
     patchItem(row.id, () => updated)
     ElMessage.success('联系单已取消')
   } catch (error) {
@@ -796,10 +1266,10 @@ function openAppendChildDialog(row: ContactRecord) {
     <template #header>
       <div class="card-header">
         <div class="card-header__title">
-          <span class="card-title">联系单管理</span>
+          <span class="card-title">{{ props.pageTitle }}</span>
           <span class="drag-tip">
             <el-icon class="drag-tip__icon"><Upload /></el-icon>
-            拖拽 PDF 到页面或附件列，可选择新建、追加附件或追加联系单
+            拖到正文列上传 PDF，拖到附件列追加该行附件；拖到页面空白处可新建、追加附件或追加联系单
           </span>
         </div>
         <el-button type="primary" @click="openCreateDialog">新建联系单</el-button>
@@ -816,16 +1286,6 @@ function openAppendChildDialog(row: ContactRecord) {
             @keyup.enter="handleSearch"
           />
         </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="searchForm.status" placeholder="全部" style="width: 120px">
-            <el-option
-              v-for="item in statusOptions"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-        </el-form-item>
         <el-form-item label="标签">
           <TagSelect v-model="searchForm.tags" :allow-create="false" width="200px" placeholder="全部" />
         </el-form-item>
@@ -841,6 +1301,7 @@ function openAppendChildDialog(row: ContactRecord) {
       <ContactFormTable
         ref="tableRef"
         v-model:attachment-drop-target-id="attachmentDropTargetId"
+        v-model:primary-pdf-drop-target-id="primaryPdfDropTargetId"
         :data="filteredData"
         :loading="loading"
         :highlighted-contact-id="highlightedContactId"
@@ -851,17 +1312,22 @@ function openAppendChildDialog(row: ContactRecord) {
         @delete="handleDelete"
         @project-no-click="handleProjectNoClick"
         @attachment-drop="handleAttachmentDrop"
-        @status-updated="handleStatusUpdated"
+        @primary-pdf-drop="handlePrimaryPdfDrop"
+        @primary-pdf-invalid-drop="handlePrimaryPdfInvalidDrop"
+        @received-date-updated="handleReceivedDateUpdated"
+        @created-at-updated="handleCreatedAtUpdated"
       />
     </div>
 
     <div class="table-pagination">
       <el-pagination
         v-model:current-page="page"
-        :page-size="pageSize"
+        v-model:page-size="pageSize"
+        :page-sizes="[...PAGE_SIZE_OPTIONS]"
         :total="total"
-        layout="total, prev, pager, next, jumper"
+        layout="total, sizes, prev, pager, next, jumper"
         background
+        @size-change="handleSizeChange"
         @current-change="handlePageChange"
       />
     </div>
@@ -901,18 +1367,18 @@ function openAppendChildDialog(row: ContactRecord) {
         filterable
         clearable
         :filter-method="filterAppendTargets"
-        placeholder="输入单号、项目号或联系主题搜索"
+        placeholder="输入单号、项目号或联系主题搜索（加工单可用项目号）"
         style="width: 100%"
         no-data-text="未找到匹配的联系单"
       >
         <el-option
           v-for="item in appendTargetOptions"
           :key="item.id"
-          :label="`${item.id} · ${item.title}`"
+          :label="formatContactOptionLabel(item)"
           :value="item.id"
         >
           <div class="append-option">
-            <span class="append-option__main">{{ item.id }} · {{ item.title }}</span>
+            <span class="append-option__main">{{ formatContactOptionLabel(item) }}</span>
             <span v-if="item.projectNos?.length" class="append-option__sub">
               项目号：{{ item.projectNos.join('、') }}
             </span>
@@ -921,10 +1387,10 @@ function openAppendChildDialog(row: ContactRecord) {
       </el-select>
       <p v-if="selectedAppendTarget" class="append-target-preview">
         <template v-if="dropAction === 'append_attachment'">
-          附件将追加到：{{ selectedAppendTarget.id }} · {{ selectedAppendTarget.title }}
+          附件将追加到：{{ formatContactOptionLabel(selectedAppendTarget) }}
         </template>
         <template v-else>
-          将基于：{{ selectedAppendTarget.id }} · {{ selectedAppendTarget.title }} 创建追加联系单
+          将基于：{{ formatContactOptionLabel(selectedAppendTarget) }} 创建追加联系单
         </template>
       </p>
     </div>
@@ -938,11 +1404,56 @@ function openAppendChildDialog(row: ContactRecord) {
   <el-dialog
     v-model="dialogVisible"
     :title="dialogTitle"
-    width="560px"
+    :width="editingId ? '600px' : '560px'"
     destroy-on-close
     @closed="handleDialogClose"
   >
     <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
+      <el-form-item v-if="editingId" label="关联方式">
+        <el-radio-group v-model="form.linkage" @change="handleLinkageChange">
+          <el-radio value="independent">独立联系单</el-radio>
+          <el-radio value="append">追加联系单</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item v-if="isEditingAppend" label="主单">
+        <el-select
+          v-model="form.parentId"
+          filterable
+          clearable
+          :filter-method="filterAppendTargets"
+          placeholder="输入单号、项目号或联系主题搜索主单"
+          style="width: 100%"
+          no-data-text="未找到匹配的联系单"
+        >
+          <el-option
+            v-for="item in editParentOptions"
+            :key="item.id"
+            :label="formatContactOptionLabel(item)"
+            :value="item.id"
+          >
+            <div class="append-option">
+              <span class="append-option__main">{{ formatContactOptionLabel(item) }}</span>
+              <span v-if="item.projectNos?.length" class="append-option__sub">
+                项目号：{{ item.projectNos.join('、') }}
+              </span>
+            </div>
+          </el-option>
+        </el-select>
+        <p v-if="selectedEditParent" class="append-target-preview">
+          将作为「{{ formatContactOptionLabel(selectedEditParent) }}」的追加联系单
+        </p>
+      </el-form-item>
+      <el-form-item v-if="isEditingAppend" label="单据类型">
+        <el-radio-group v-model="form.relationType">
+          <el-radio
+            v-for="item in relationTypeOptions"
+            :key="item.value"
+            :value="item.value"
+          >
+            {{ item.label }}
+          </el-radio>
+        </el-radio-group>
+      </el-form-item>
       <el-form-item label="联系单类型">
         <el-radio-group v-model="form.contactType" @change="handleContactTypeChange">
           <el-radio
@@ -954,22 +1465,32 @@ function openAppendChildDialog(row: ContactRecord) {
           </el-radio>
         </el-radio-group>
       </el-form-item>
-      <el-form-item label="联系单号" prop="id">
+      <el-form-item v-if="form.contactType !== 'processing'" label="联系单号" prop="id">
         <el-input v-model="form.id" placeholder="请输入联系单号" />
       </el-form-item>
       <el-form-item label="联系主题" prop="title">
         <el-input v-model="form.title" placeholder="请输入联系主题" />
       </el-form-item>
-      <el-form-item label="项目号">
+      <el-form-item
+        label="项目号"
+        :prop="form.contactType === 'processing' ? 'projectNos' : undefined"
+      >
         <el-select
           v-model="form.projectNos"
           multiple
           filterable
           allow-create
           default-first-option
-          placeholder="请输入项目号，可添加多个"
+          :placeholder="
+            form.contactType === 'processing'
+              ? '加工单以项目号定位，请填写项目号'
+              : '请输入项目号，可添加多个'
+          "
           style="width: 100%"
         />
+        <div v-if="form.contactType === 'processing'" class="upload-tip">
+          加工单无联系单号，列表中显示为「加工单(项目号)」
+        </div>
       </el-form-item>
       <el-form-item label="标签">
         <TagSelect v-model="form.tagIds" />
@@ -1044,19 +1565,28 @@ function openAppendChildDialog(row: ContactRecord) {
           </div>
         </div>
       </el-form-item>
-      <el-form-item v-if="!editingId" label="追加附件">
+      <el-form-item label="追加附件">
         <el-upload
           v-model:file-list="form.attachmentList"
           class="attachment-upload"
-          accept=".pdf,application/pdf"
+          drag
           multiple
           :auto-upload="false"
           :on-change="handleAttachmentChange"
           :on-remove="handleAttachmentRemove"
         >
-          <el-button type="primary" plain>选择追加附件</el-button>
+          <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+          <div class="el-upload__text">
+            将文件拖到此处，或<em>点击选择</em>
+          </div>
           <template #tip>
-            <div class="upload-tip">追加附件为补充材料；追加联系单请使用列表操作或拖放导入</div>
+            <div class="upload-tip">
+              {{
+                editingId
+                  ? '可追加或移除附件；文件先在本地暂存，保存联系单时再上传'
+                  : '追加附件为补充材料；文件先在本地暂存，提交联系单时再上传'
+              }}
+            </div>
           </template>
         </el-upload>
       </el-form-item>
@@ -1079,16 +1609,31 @@ function openAppendChildDialog(row: ContactRecord) {
     <p v-if="childParentRecord" class="append-target-preview">
       主单：{{ childParentRecord.id }} · {{ childParentRecord.title }}
     </p>
-    <el-form ref="childFormRef" :model="childForm" :rules="formRules" label-width="100px">
+    <el-form ref="childFormRef" :model="childForm" :rules="childFormRules" label-width="100px">
+      <el-form-item label="联系单类型">
+        <el-radio-group v-model="childForm.contactType" @change="handleChildContactTypeChange">
+          <el-radio
+            v-for="item in contactFormTypeOptions"
+            :key="item.value"
+            :value="item.value"
+          >
+            {{ item.label }}
+          </el-radio>
+        </el-radio-group>
+      </el-form-item>
       <el-form-item label="单据类型">
-        <el-select v-model="childForm.relationType" style="width: 100%">
-          <el-option
+        <el-radio-group v-model="childForm.relationType">
+          <el-radio
             v-for="item in relationTypeOptions"
             :key="item.value"
-            :label="item.label"
             :value="item.value"
-          />
-        </el-select>
+          >
+            {{ item.label }}
+          </el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item v-if="childForm.contactType !== 'processing'" label="联系单编号" prop="id">
+        <el-input v-model="childForm.id" placeholder="请输入联系单编号" />
       </el-form-item>
       <el-form-item label="联系主题" prop="title">
         <el-input v-model="childForm.title" placeholder="请输入联系主题" />
@@ -1172,6 +1717,43 @@ function openAppendChildDialog(row: ContactRecord) {
     <template #footer>
       <el-button @click="childDialogVisible = false">取消</el-button>
       <el-button type="primary" @click="handleChildSubmit">创建</el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="projectCreateDialogVisible"
+    title="新建项目"
+    width="520px"
+    destroy-on-close
+    @closed="handleProjectCreateDialogClosed"
+  >
+    <el-form
+      ref="projectCreateFormRef"
+      :model="projectCreateForm"
+      :rules="projectCreateFormRules"
+      label-width="100px"
+    >
+      <el-form-item label="项目号" prop="projectNo">
+        <el-input v-model="projectCreateForm.projectNo" placeholder="请输入项目号" />
+      </el-form-item>
+      <el-form-item label="项目名称" prop="name">
+        <el-input v-model="projectCreateForm.name" placeholder="请输入项目名称" />
+      </el-form-item>
+      <el-form-item label="计划开始">
+        <el-date-picker
+          v-model="projectCreateForm.plannedStartDate"
+          type="date"
+          placeholder="选择计划开始日期"
+          value-format="YYYY-MM-DD"
+          style="width: 100%"
+        />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="projectCreateDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="projectCreateSubmitting" @click="submitProjectCreate">
+        创建
+      </el-button>
     </template>
   </el-dialog>
   </div>

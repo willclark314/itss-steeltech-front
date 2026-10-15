@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { fetchContactList } from '@/api/contacts'
 import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
+import { PAGE_SIZE_OPTIONS } from '@/constants/pagination'
 import { ContactForm } from '@/models/biz/contact'
 import type {
   ContactGroupBy,
@@ -22,15 +23,13 @@ const highlightedContactId = ref('')
 
 const searchForm = reactive({
   keyword: '',
-  status: '',
   tags: [] as string[],
 })
 
-const statusOptions = ContactForm.STATUS_OPTIONS
 const groupByOptions = ContactForm.GROUP_BY_OPTIONS
 
-const pageSize = 20
 const {
+  pageSize,
   filteredData,
   total,
   page,
@@ -42,17 +41,15 @@ const {
   getAllList,
   cacheRevision,
 } = usePaginatedListCache<ContactRecord>({
-  pageSize,
   getItemKey: (item) => item.id,
   sortList: ContactForm.sortForDisplay,
 })
 
-type PaginatedFilters = { keyword?: string; status?: string; tags?: string[] }
+type PaginatedFilters = { keyword?: string; tags?: string[] }
 
 function buildListQuery(params: PaginatedFilters & { page?: number; pageSize?: number; anchor?: string; all?: boolean }) {
   return {
     keyword: params.keyword,
-    status: params.status,
     tags: params.tags,
     page: params.page,
     pageSize: params.pageSize,
@@ -82,7 +79,6 @@ async function loadAroundAnchor(anchor: string, nextFilters?: PaginatedFilters, 
 function buildViewFilters(): PaginatedFilters {
   return {
     keyword: searchForm.keyword,
-    status: searchForm.status,
     tags: searchForm.tags.length ? [...searchForm.tags] : undefined,
   }
 }
@@ -137,9 +133,9 @@ function getGroupPage(groupKey: string) {
 
 function paginateGroupMembers(members: ContactRecord[], groupKey: string) {
   const pageNo = getGroupPage(groupKey)
-  const start = (pageNo - 1) * pageSize
+  const start = (pageNo - 1) * pageSize.value
   const sorted = ContactForm.sortForDisplay(members)
-  return sorted.slice(start, start + pageSize)
+  return sorted.slice(start, start + pageSize.value)
 }
 
 function handleGroupPageChange(groupKey: string, nextPage: number) {
@@ -160,7 +156,7 @@ function clampGroupPages() {
   let changed = false
 
   for (const group of recordGroups.value) {
-    const maxPage = Math.max(1, Math.ceil(group.members.length / pageSize))
+    const maxPage = Math.max(1, Math.ceil(group.members.length / pageSize.value))
     const currentPage = nextPages[group.key] || 1
     if (currentPage > maxPage) {
       nextPages[group.key] = maxPage
@@ -239,6 +235,20 @@ async function handlePageChange(nextPage: number) {
   }
 }
 
+async function handleSizeChange() {
+  try {
+    if (isGrouped.value) {
+      clampGroupPages()
+      return
+    }
+    await loadPage(1, getFilters())
+    highlightedContactId.value = ''
+    nextTick(() => tableRef.value?.tableRef?.setScrollTop(0))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载联系单数据失败')
+  }
+}
+
 async function handleSearch() {
   if (route.query.contactId) {
     router.replace({ path: BIZ_ROUTES.contactBrowse })
@@ -251,7 +261,6 @@ async function handleSearch() {
 
 async function handleReset() {
   searchForm.keyword = ''
-  searchForm.status = ''
   searchForm.tags = []
   highlightedContactId.value = ''
   if (route.query.contactId) {
@@ -267,8 +276,7 @@ async function applyContactIdFromRoute() {
 
   if (typeof contactId === 'string' && contactId) {
     searchForm.keyword = ''
-    searchForm.status = ''
-    highlightedContactId.value = contactId
+      highlightedContactId.value = contactId
     try {
       await loadAroundAnchor(contactId, {})
       nextTick(() => scrollToContact(contactId))
@@ -348,16 +356,6 @@ onMounted(async () => {
             @keyup.enter="handleSearch"
           />
         </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="searchForm.status" placeholder="全部" style="width: 120px">
-            <el-option
-              v-for="item in statusOptions"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-        </el-form-item>
         <el-form-item label="标签">
           <TagSelect v-model="searchForm.tags" :allow-create="false" width="200px" placeholder="全部" />
         </el-form-item>
@@ -391,10 +389,12 @@ onMounted(async () => {
       <div class="table-pagination">
         <el-pagination
           v-model:current-page="page"
-          :page-size="pageSize"
+          v-model:page-size="pageSize"
+          :page-sizes="[...PAGE_SIZE_OPTIONS]"
           :total="total"
-          layout="total, prev, pager, next, jumper"
+          layout="total, sizes, prev, pager, next, jumper"
           background
+          @size-change="handleSizeChange"
           @current-change="handlePageChange"
         />
       </div>
@@ -431,10 +431,12 @@ onMounted(async () => {
         <div class="table-pagination">
           <el-pagination
             :current-page="getGroupPage(activeGroup.key)"
-            :page-size="pageSize"
+            v-model:page-size="pageSize"
+            :page-sizes="[...PAGE_SIZE_OPTIONS]"
             :total="activeGroup.members.length"
-            layout="total, prev, pager, next, jumper"
+            layout="total, sizes, prev, pager, next, jumper"
             background
+            @size-change="handleSizeChange"
             @current-change="(nextPage) => handleGroupPageChange(activeGroup!.key, nextPage)"
           />
         </div>

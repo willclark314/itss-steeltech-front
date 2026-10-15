@@ -2,8 +2,14 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, type FormInstance } from 'element-plus'
 import { createRole, updateRole } from '@/api/roles'
-import { RoleForm } from '@/models/personnel'
-import type { PermissionRecord, PersonnelRecord, RoleRecord } from '@/models/personnel'
+import { RoleForm, PersonnelForm } from '@/models/personnel'
+import type {
+  ModulePermissionGroup,
+  PagePermissionGroup,
+  PermissionRecord,
+  PersonnelRecord,
+  RoleRecord,
+} from '@/models/personnel'
 
 const props = defineProps<{
   modelValue: boolean
@@ -31,6 +37,10 @@ const permissionGroups = computed(() =>
   RoleForm.groupPermissionsByModule(props.permissionOptions),
 )
 
+const workshopOptions = computed(() =>
+  PersonnelForm.collectWorkshopTabs(props.personnelOptions),
+)
+
 watch(
   () => props.modelValue,
   (visible) => {
@@ -52,6 +62,22 @@ function handleDialogClosed() {
   emit('closed')
 }
 
+function getPageViewId(page: PagePermissionGroup) {
+  return RoleForm.getPagePermission(page, 'view')?.id ?? ''
+}
+
+function handleModuleCheckChange(group: ModulePermissionGroup, checked: boolean) {
+  form.permissionIds = RoleForm.setModuleAccessEnabled(form.permissionIds, group, checked)
+}
+
+function handlePageCheckChange(page: PagePermissionGroup, checked: boolean) {
+  form.permissionIds = RoleForm.applyPageAccessToggle(form.permissionIds, page, checked)
+}
+
+const accessiblePageCount = computed(() =>
+  RoleForm.countAccessiblePages(permissionGroups.value, form.permissionIds),
+)
+
 async function handleSubmit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
@@ -64,6 +90,7 @@ async function handleSubmit() {
       description: form.description.trim(),
       status: form.status,
       permissionIds: [...form.permissionIds],
+      assignedWorkshops: RoleForm.toApiWorkshops([...form.assignedWorkshops]),
       assignedPersonnelIds: [...form.assignedPersonnelIds],
     }
 
@@ -136,15 +163,38 @@ async function handleSubmit() {
             </el-form-item>
           </el-col>
           <el-col :span="24">
-            <el-form-item label="关联人员">
+            <el-form-item label="关联科室">
               <el-select
-                v-model="form.assignedPersonnelIds"
+                v-model="form.assignedWorkshops"
                 multiple
                 filterable
                 collapse-tags
                 collapse-tags-tooltip
                 class="personnel-select"
-                placeholder="选择关联的具体人员"
+                placeholder="选择关联科室"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="tab in workshopOptions"
+                  :key="tab.key"
+                  :label="`${tab.label}（${tab.count}人）`"
+                  :value="tab.key"
+                />
+              </el-select>
+              <p class="assign-hint">关联科室的人员将自动拥有该角色；也可额外指定个人。</p>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-form-item label="关联人员">
+              <el-select
+                v-model="form.assignedPersonnelIds"
+                multiple
+                filterable
+                :reserve-keyword="false"
+                collapse-tags
+                collapse-tags-tooltip
+                class="personnel-select"
+                placeholder="选择额外关联的具体人员"
                 style="width: 100%"
               >
                 <el-option
@@ -162,35 +212,49 @@ async function handleSubmit() {
       <section class="role-permission-section">
         <div class="role-permission-header">
           <span class="role-permission-title">页面权限</span>
-          <span class="role-permission-count">已选 {{ form.permissionIds.length }} 项</span>
+          <span class="role-permission-count">已选择 {{ accessiblePageCount }} 个页面</span>
         </div>
+        <p class="role-permission-hint">
+          勾选<strong>系统</strong>可全选该系统下所有页面；取消系统勾选将关闭该系统全部页面访问与数据请求，也可单独勾选具体页面。
+        </p>
+
         <div class="permission-panel">
-          <div
-            v-for="group in permissionGroups"
-            :key="group.module"
-            class="permission-group"
-          >
-            <div class="permission-group-title">{{ group.module }}</div>
-            <div class="permission-page-grid">
-              <div
-                v-for="page in group.pages"
-                :key="page.pageKey"
-                class="permission-page"
+          <div v-if="permissionGroups.length" class="permission-module-list">
+            <section
+              v-for="group in permissionGroups"
+              :key="group.module"
+              class="permission-module-block"
+            >
+              <el-checkbox
+                :model-value="RoleForm.isModuleFullySelected(group, form.permissionIds)"
+                :indeterminate="RoleForm.isModulePartiallySelected(group, form.permissionIds)"
+                class="permission-module-checkbox"
+                @change="(checked) => handleModuleCheckChange(group, Boolean(checked))"
               >
-                <div class="permission-page-title" :title="page.path">{{ page.pageName }}</div>
-                <el-checkbox-group v-model="form.permissionIds" class="permission-checkbox-group">
-                  <el-checkbox
-                    v-for="permission in page.permissions"
-                    :key="permission.id"
-                    :value="permission.id"
-                    :title="permission.code"
-                  >
-                    {{ permission.name }}
-                  </el-checkbox>
-                </el-checkbox-group>
+                <span class="permission-module-name">{{ group.module }}</span>
+                <span class="permission-module-count">
+                  （{{ RoleForm.countAccessiblePagesInModule(group, form.permissionIds) }}/{{
+                    group.pages.length
+                  }}）
+                </span>
+              </el-checkbox>
+
+              <div class="permission-page-list">
+                <el-checkbox
+                  v-for="page in group.pages"
+                  :key="page.pageKey"
+                  :model-value="RoleForm.isPageAccessGranted(page, form.permissionIds)"
+                  :disabled="!getPageViewId(page)"
+                  :title="page.path"
+                  class="permission-page-checkbox"
+                  @change="(checked) => handlePageCheckChange(page, Boolean(checked))"
+                >
+                  {{ page.pageName }}
+                </el-checkbox>
               </div>
-            </div>
+            </section>
           </div>
+          <p v-else class="permission-empty">暂无页面权限</p>
         </div>
       </section>
     </el-form>
@@ -230,7 +294,7 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .role-permission-title {
@@ -241,6 +305,20 @@ async function handleSubmit() {
 
 .role-permission-count {
   font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.role-permission-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+.assign-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--el-text-color-secondary);
 }
 
@@ -256,68 +334,82 @@ async function handleSubmit() {
 
 .permission-panel {
   width: 100%;
-  min-height: 420px;
-  max-height: calc(72vh - 220px);
+  min-height: 360px;
+  max-height: calc(72vh - 240px);
   overflow-y: auto;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-fill-color-blank);
 }
 
-.permission-group + .permission-group {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--el-border-color-lighter);
+.permission-module-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.permission-group-title {
-  margin-bottom: 10px;
+.permission-module-block {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.permission-module-block:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.permission-module-checkbox {
+  display: flex;
+  align-items: center;
+  height: auto;
+  margin-right: 0;
+}
+
+.permission-module-checkbox :deep(.el-checkbox__label) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 14px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
 
-.permission-page-grid {
+.permission-module-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+
+.permission-page-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding-left: 24px;
 }
 
-.permission-page {
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color-extra-light);
-  border-radius: 6px;
-  background: var(--el-fill-color-light);
-}
-
-.permission-page-title {
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-regular);
-}
-
-.permission-checkbox-group {
+.permission-page-checkbox {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-}
-
-.permission-page :deep(.el-checkbox) {
+  align-items: center;
+  height: auto;
   margin-right: 0;
-  height: 28px;
 }
 
-.permission-page :deep(.el-checkbox__label) {
+.permission-page-checkbox :deep(.el-checkbox__label) {
   font-size: 13px;
-  padding-left: 6px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-@media (max-width: 768px) {
-  .permission-page-grid {
-    grid-template-columns: 1fr;
-  }
+.permission-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+  padding: 48px 0;
 }
 </style>
 

@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import {
   createTempTask,
   deleteTempTask,
@@ -10,8 +11,10 @@ import {
   type TempTaskRecord,
 } from '@/api/tempTasks'
 import { fetchPersonnelList } from '@/api/personnel'
+import { fetchProjectList } from '@/api/projects'
 import OverflowTooltip from '@/components/biz/OverflowTooltip.vue'
 import { TempTaskForm } from '@/models/portal/TempTaskForm'
+import type { ProjectRecord } from '@/models/biz/project'
 import type { PersonnelRecord } from '@/models/personnel'
 import { getUser } from '@/utils/auth'
 
@@ -19,12 +22,15 @@ const props = defineProps<{
   personnelId: string
 }>()
 
+const router = useRouter()
+
 const loading = ref(false)
 const saving = ref(false)
 const tasks = ref<TempTaskRecord[]>([])
 const personnelOptions = ref<PersonnelRecord[]>([])
 const dialogVisible = ref(false)
 const editingTask = ref<TempTaskRecord | null>(null)
+const linkedProject = ref<ProjectRecord | null>(null)
 
 const currentUserPersonnelId = getUser()?.personnelId ?? ''
 
@@ -33,6 +39,8 @@ const form = reactive({
   description: '',
   startTime: '',
   completedAt: '',
+  isRelatedProject: false,
+  relatedProjectNo: '',
   personnelIds: [] as string[],
 })
 
@@ -66,9 +74,15 @@ function resetForm(task: TempTaskRecord | null = null) {
   if (task) {
     form.name = task.name
     form.description = task.description
-    form.startTime = task.startTime
-    form.completedAt = task.completedAt
+    form.startTime = TempTaskForm.formatShortDate(task.startTime)
+    form.completedAt = TempTaskForm.formatShortDate(task.completedAt)
+    form.isRelatedProject = !!task.isRelatedProject
+    form.relatedProjectNo = task.relatedProjectNo || ''
     form.personnelIds = [...task.personnelIds]
+    linkedProject.value = null
+    if (form.isRelatedProject && form.relatedProjectNo) {
+      void refreshLinkedProject(form.relatedProjectNo)
+    }
     return
   }
   const defaults = TempTaskForm.buildCreateDefaults(props.personnelId)
@@ -76,10 +90,58 @@ function resetForm(task: TempTaskRecord | null = null) {
   form.description = defaults.description
   form.startTime = defaults.startTime
   form.completedAt = defaults.completedAt
+  form.isRelatedProject = defaults.isRelatedProject
+  form.relatedProjectNo = defaults.relatedProjectNo
   form.personnelIds = defaults.personnelIds
+  linkedProject.value = null
   if (currentUserPersonnelId && !form.personnelIds.includes(currentUserPersonnelId)) {
     form.personnelIds.unshift(currentUserPersonnelId)
   }
+}
+
+async function refreshLinkedProject(projectNo: string) {
+  const keyword = projectNo.trim()
+  if (!keyword) {
+    linkedProject.value = null
+    return
+  }
+  try {
+    const result = await fetchProjectList({ keyword, page: 1, pageSize: 20 })
+    const normalized = keyword.toLowerCase()
+    linkedProject.value =
+      result.list.find((item) => item.projectNo.trim().toLowerCase() === normalized) || null
+  } catch {
+    linkedProject.value = null
+  }
+}
+
+async function queryProjectSuggestions(
+  queryString: string,
+  callback: (items: Array<{ value: string; label: string; project?: ProjectRecord }>) => void,
+) {
+  const keyword = (queryString || '').trim()
+  if (!keyword) {
+    callback([])
+    return
+  }
+  try {
+    const result = await fetchProjectList({ keyword, page: 1, pageSize: 20 })
+    callback(
+      result.list.slice(0, 20).map((item) => ({
+        value: item.projectNo,
+        label: `${item.projectNo}${item.name ? `｜${item.name}` : ''}`,
+        project: item,
+      })),
+    )
+  } catch {
+    callback([])
+  }
+}
+
+function goToLinkedProject() {
+  const projectNo = form.relatedProjectNo.trim()
+  if (!projectNo) return
+  void router.push({ path: '/business/project', query: { projectNo } })
 }
 
 function openCreateDialog() {
@@ -108,6 +170,10 @@ async function handleSave() {
     ElMessage.warning('请至少选择一名关联人员')
     return
   }
+  if (form.isRelatedProject && !form.relatedProjectNo.trim()) {
+    ElMessage.warning('请填写关联项目号')
+    return
+  }
 
   saving.value = true
   try {
@@ -116,6 +182,8 @@ async function handleSave() {
       description: form.description.trim(),
       startTime: form.startTime,
       completedAt: form.completedAt,
+      isRelatedProject: form.isRelatedProject,
+      relatedProjectNo: form.relatedProjectNo.trim(),
       personnelIds: form.personnelIds,
     }
     if (editingTask.value) {
@@ -161,6 +229,27 @@ watch(
   },
 )
 
+watch(
+  () => form.isRelatedProject,
+  (value) => {
+    if (!value) {
+      form.relatedProjectNo = ''
+      linkedProject.value = null
+    }
+  },
+)
+
+watch(
+  () => form.relatedProjectNo,
+  (value) => {
+    if (form.isRelatedProject && value?.trim()) {
+      void refreshLinkedProject(value)
+    } else {
+      linkedProject.value = null
+    }
+  },
+)
+
 onMounted(() => {
   void loadPersonnelOptions()
   void loadTasks()
@@ -191,7 +280,15 @@ onMounted(() => {
       >
         <OverflowTooltip :content="task.name">
           <span class="my-temp-task-item__line">
-            <span class="my-temp-task-item__name ellipsis-cell">{{ task.name }}</span>
+            <span class="my-temp-task-item__name ellipsis-cell">
+              {{ task.name }}
+              <span
+                v-if="task.isRelatedProject && task.relatedProjectNo"
+                class="my-temp-task-item__project"
+              >
+                （{{ task.relatedProjectNo }}）
+              </span>
+            </span>
             <span class="my-temp-task-item__date">{{ TempTaskForm.formatShortDate(task.startTime) }}</span>
           </span>
         </OverflowTooltip>
@@ -213,9 +310,9 @@ onMounted(() => {
         <el-form-item label="开始时间" required>
           <el-date-picker
             v-model="form.startTime"
-            type="datetime"
+            type="date"
             placeholder="选择开始时间"
-            :value-format="TempTaskForm.DATETIME_FORMAT"
+            :value-format="TempTaskForm.DATE_FORMAT"
             style="width: 100%"
           />
         </el-form-item>
@@ -223,12 +320,43 @@ onMounted(() => {
         <el-form-item label="完成时间">
           <el-date-picker
             v-model="form.completedAt"
-            type="datetime"
+            type="date"
             placeholder="选择完成时间"
-            :value-format="TempTaskForm.DATETIME_FORMAT"
+            :value-format="TempTaskForm.DATE_FORMAT"
             clearable
             style="width: 100%"
           />
+        </el-form-item>
+
+        <el-form-item label="关联项目">
+          <div class="my-temp-task-project__row">
+            <el-switch v-model="form.isRelatedProject" />
+            <el-autocomplete
+              v-if="form.isRelatedProject"
+              v-model="form.relatedProjectNo"
+              :fetch-suggestions="queryProjectSuggestions"
+              placeholder="输入项目号搜索"
+              clearable
+              style="flex: 1; min-width: 0"
+            >
+              <template #default="{ item }">
+                <div class="my-temp-task-project__option">
+                  <span class="my-temp-task-project__option-label">{{ item.label }}</span>
+                </div>
+              </template>
+            </el-autocomplete>
+            <el-button
+              v-if="form.isRelatedProject && form.relatedProjectNo.trim()"
+              type="primary"
+              link
+              @click="goToLinkedProject"
+            >
+              打开
+            </el-button>
+          </div>
+          <div v-if="form.isRelatedProject && linkedProject" class="my-temp-task-project__hint">
+            已连接：{{ linkedProject.projectNo }}{{ linkedProject.name ? `｜${linkedProject.name}` : '' }}
+          </div>
         </el-form-item>
 
         <el-form-item label="关联人员">
@@ -373,6 +501,11 @@ onMounted(() => {
   color: var(--el-text-color-primary);
 }
 
+.my-temp-task-item__project {
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+
 .my-temp-task-item__date {
   flex-shrink: 0;
   font-size: 11px;
@@ -391,5 +524,32 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   margin-left: auto;
+}
+
+.my-temp-task-project__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.my-temp-task-project__hint {
+  margin-top: 6px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.my-temp-task-project__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.my-temp-task-project__option-label {
+  font-size: 12px;
+  color: var(--el-text-color-primary);
 }
 </style>

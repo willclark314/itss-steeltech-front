@@ -1,0 +1,36 @@
+.project-no-info-message .el-message__content {
+  align-items: flex-start;
+}
+
+.project-no-info-message__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.project-no-info-message__title {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.project-no-info-message__line {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.project-no-info-message__jump {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--el-color-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-no-info-message__jump:hover {
+  color: var(--el-color-primary-light-3);
+}

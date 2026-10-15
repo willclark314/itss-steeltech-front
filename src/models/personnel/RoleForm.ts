@@ -1,4 +1,7 @@
 import type { FormRules } from 'element-plus'
+import { APP_PAGES } from '@/models/navigation/appNavigation'
+import { getModuleOrderMap, getPageOrderMap } from '@/utils/navigationOrder'
+import { PersonnelForm } from './PersonnelForm'
 
 export type RoleStatus = 'active' | 'inactive'
 export type PermissionAction = 'view' | 'edit'
@@ -41,6 +44,7 @@ export interface RoleRecord {
   status: RoleStatus
   permissionIds: string[]
   permissions: PermissionRecord[]
+  assignedWorkshops: string[]
   assignedPersonnelIds: string[]
   assignedPersonnel: RoleAssignee[]
 }
@@ -57,15 +61,8 @@ export interface RoleFormData {
   description: string
   status: RoleStatus
   permissionIds: string[]
+  assignedWorkshops: string[]
   assignedPersonnelIds: string[]
-}
-
-type PageDefinition = {
-  pageKey: string
-  pageName: string
-  module: string
-  path: string
-  actions: PermissionAction[]
 }
 
 export class RoleForm {
@@ -95,131 +92,22 @@ export class RoleForm {
     code: [{ required: true, message: '请输入角色编码', trigger: 'blur' }],
   }
 
-  static readonly ACTION_LABELS: Record<PermissionAction, string> = {
-    view: '查看',
-    edit: '编辑',
-  }
-
-  static readonly PAGE_DEFINITIONS: PageDefinition[] = [
-    { pageKey: 'home', pageName: '首页', module: '门户', path: '/home', actions: ['view', 'edit'] },
-    {
-      pageKey: 'about',
-      pageName: '关于',
-      module: '门户',
-      path: '/portal/about',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'guide',
-      pageName: '说明',
-      module: '门户',
-      path: '/portal/guide',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'contact-browse',
-      pageName: '联系单',
-      module: '业务系统',
-      path: '/business/contact-browse',
-      actions: ['view'],
-    },
-    {
-      pageKey: 'contact',
-      pageName: '联系单管理',
-      module: '业务系统',
-      path: '/business/contact',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'project-browse',
-      pageName: '项目',
-      module: '业务系统',
-      path: '/business/project-browse',
-      actions: ['view'],
-    },
-    {
-      pageKey: 'project',
-      pageName: '项目管理',
-      module: '业务系统',
-      path: '/business/project',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'schedule',
-      pageName: '工作安排',
-      module: '业务系统',
-      path: '/business/schedule',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'detail-team-schedule',
-      pageName: '细化组排班',
-      module: '业务系统',
-      path: '/business/detail-team-schedule',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'person',
-      pageName: '人员',
-      module: '人员系统',
-      path: '/personnel/person',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'role',
-      pageName: '角色',
-      module: '人员系统',
-      path: '/personnel/role',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'leave',
-      pageName: '年休',
-      module: '人员系统',
-      path: '/personnel/leave',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'monthly-rest',
-      pageName: '月休',
-      module: '人员系统',
-      path: '/personnel/monthly-rest',
-      actions: ['view', 'edit'],
-    },
-    {
-      pageKey: 'system-settings',
-      pageName: '全局配置',
-      module: '系统设置',
-      path: '/system/settings',
-      actions: ['view', 'edit'],
-    },
-  ]
-
-  static readonly PAGE_ACTIONS: PermissionAction[] = ['view', 'edit']
   static readonly ACTION_ORDER: PermissionAction[] = ['view', 'edit']
 
-  static readonly MODULE_ORDER: string[] = [
-    ...new Set(RoleForm.PAGE_DEFINITIONS.map((page) => page.module)),
-  ]
-
-  private static readonly PAGE_ORDER_MAP = new Map(
-    RoleForm.PAGE_DEFINITIONS.map((page, index) => [page.pageKey, index]),
-  )
-
-  private static readonly MODULE_ORDER_MAP = new Map(
-    RoleForm.MODULE_ORDER.map((module, index) => [module, index]),
-  )
+  static readonly MODULE_ORDER: string[] = [...new Set(APP_PAGES.map((page) => page.module))]
 
   static compareModuleOrder(a: string, b: string) {
-    const indexA = RoleForm.MODULE_ORDER_MAP.get(a) ?? Number.MAX_SAFE_INTEGER
-    const indexB = RoleForm.MODULE_ORDER_MAP.get(b) ?? Number.MAX_SAFE_INTEGER
+    const moduleOrderMap = getModuleOrderMap()
+    const indexA = moduleOrderMap.get(a) ?? Number.MAX_SAFE_INTEGER
+    const indexB = moduleOrderMap.get(b) ?? Number.MAX_SAFE_INTEGER
     if (indexA !== indexB) return indexA - indexB
     return a.localeCompare(b, 'zh-CN')
   }
 
   static comparePageOrder(a: string, b: string) {
-    const indexA = RoleForm.PAGE_ORDER_MAP.get(a) ?? Number.MAX_SAFE_INTEGER
-    const indexB = RoleForm.PAGE_ORDER_MAP.get(b) ?? Number.MAX_SAFE_INTEGER
+    const pageOrderMap = getPageOrderMap()
+    const indexA = pageOrderMap.get(a) ?? Number.MAX_SAFE_INTEGER
+    const indexB = pageOrderMap.get(b) ?? Number.MAX_SAFE_INTEGER
     if (indexA !== indexB) return indexA - indexB
     return a.localeCompare(b, 'zh-CN')
   }
@@ -237,16 +125,6 @@ export class RoleForm {
     })
   }
 
-  static cloneRecord(record: RoleRecord): RoleRecord {
-    return {
-      ...record,
-      permissionIds: [...record.permissionIds],
-      permissions: record.permissions.map((item) => ({ ...item })),
-      assignedPersonnelIds: [...record.assignedPersonnelIds],
-      assignedPersonnel: record.assignedPersonnel.map((item) => ({ ...item })),
-    }
-  }
-
   static filter(records: RoleRecord[], { keyword = '', status = '' }: RoleFilterParams = {}) {
     const normalizedKeyword = keyword.trim().toLowerCase()
 
@@ -262,6 +140,9 @@ export class RoleForm {
         ...item.permissions.map(
           (permission) =>
             `${permission.module} ${permission.pageName} ${permission.name} ${permission.code} ${permission.action}`,
+        ),
+        ...item.assignedWorkshops.map((workshop) =>
+          RoleForm.formatWorkshopLabel(workshop),
         ),
         ...item.assignedPersonnel.map((person) => `${person.name} ${person.team}`),
       ]
@@ -324,13 +205,110 @@ export class RoleForm {
       .sort((a, b) => RoleForm.compareModuleOrder(a.module, b.module))
   }
 
-  static formatPermissionLabel(permission: PermissionRecord) {
-    return `${permission.pageName}·${permission.name}`
+  static getPagePermission(page: PagePermissionGroup, action: PermissionAction) {
+    return page.permissions.find((item) => item.action === action)
   }
 
-  static formatPagePermissionSummary(page: PagePermissionGroup) {
-    const actions = page.permissions.map((item) => item.name).join('/')
-    return actions ? `${page.pageName}(${actions})` : page.pageName
+  static isPageAccessGranted(page: PagePermissionGroup, permissionIds: string[]) {
+    const view = RoleForm.getPagePermission(page, 'view')
+    return Boolean(view && permissionIds.includes(view.id))
+  }
+
+  static isPagePermissionGranted(page: PagePermissionGroup, permissionIds: string[]) {
+    return page.permissions.some((item) => permissionIds.includes(item.id))
+  }
+
+  static groupAccessiblePagesByModule(
+    allPermissions: PermissionRecord[],
+    permissionIds: string[],
+  ): ModulePermissionGroup[] {
+    return RoleForm.groupPermissionsByModule(allPermissions)
+      .map((group) => ({
+        ...group,
+        pages: group.pages.filter((page) =>
+          RoleForm.isPagePermissionGranted(page, permissionIds),
+        ),
+      }))
+      .filter((group) => group.pages.length > 0)
+  }
+
+  static getModuleViewPermissionIds(module: ModulePermissionGroup): string[] {
+    return module.pages
+      .map((page) => RoleForm.getPagePermission(page, 'view')?.id)
+      .filter((id): id is string => Boolean(id))
+  }
+
+  static getModulePermissionIds(module: ModulePermissionGroup): string[] {
+    return module.pages.flatMap((page) => page.permissions.map((item) => item.id))
+  }
+
+  static isModuleFullySelected(module: ModulePermissionGroup, permissionIds: string[]) {
+    const total = module.pages.length
+    if (!total) return false
+    return RoleForm.countAccessiblePagesInModule(module, permissionIds) === total
+  }
+
+  static isModulePartiallySelected(module: ModulePermissionGroup, permissionIds: string[]) {
+    const selected = RoleForm.countAccessiblePagesInModule(module, permissionIds)
+    const total = module.pages.length
+    return selected > 0 && selected < total
+  }
+
+  static isModuleAccessEnabled(module: ModulePermissionGroup, permissionIds: string[]) {
+    return RoleForm.countAccessiblePagesInModule(module, permissionIds) > 0
+  }
+
+  static setModuleAccessEnabled(
+    permissionIds: string[],
+    module: ModulePermissionGroup,
+    enabled: boolean,
+  ): string[] {
+    const moduleIds = new Set(RoleForm.getModulePermissionIds(module))
+    const otherIds = permissionIds.filter((id) => !moduleIds.has(id))
+    if (!enabled) return otherIds
+    return [...otherIds, ...RoleForm.getModuleViewPermissionIds(module)]
+  }
+
+  static countAccessiblePagesInModule(module: ModulePermissionGroup, permissionIds: string[]) {
+    return module.pages.filter((page) => RoleForm.isPageAccessGranted(page, permissionIds)).length
+  }
+
+  static countAccessiblePages(groups: ModulePermissionGroup[], permissionIds: string[]) {
+    return groups.reduce(
+      (sum, group) => sum + RoleForm.countAccessiblePagesInModule(group, permissionIds),
+      0,
+    )
+  }
+
+  /** 页面访问开关：开启授予 view，关闭移除该页面全部权限（含历史 edit） */
+  static applyPageAccessToggle(
+    permissionIds: string[],
+    page: PagePermissionGroup,
+    checked: boolean,
+  ): string[] {
+    const view = RoleForm.getPagePermission(page, 'view')
+    const pageIds = page.permissions.map((item) => item.id)
+    const next = new Set(permissionIds)
+    if (checked) {
+      if (view) next.add(view.id)
+    } else {
+      for (const id of pageIds) next.delete(id)
+    }
+    return [...next]
+  }
+
+  static formatWorkshopLabel(workshop: string) {
+    return PersonnelForm.formatWorkshopLabel(PersonnelForm.normalizeWorkshopKey(workshop))
+  }
+
+  static toApiWorkshops(workshopKeys: string[]) {
+    return workshopKeys.map((key) =>
+      key === PersonnelForm.EMPTY_WORKSHOP_KEY ? '' : key,
+    )
+  }
+
+  static fromApiWorkshops(workshops: string[] = []) {
+    return workshops.map((workshop) => PersonnelForm.normalizeWorkshopKey(workshop))
   }
 
   static createEmptyForm(): RoleFormData {
@@ -341,6 +319,7 @@ export class RoleForm {
       description: '',
       status: RoleForm.STATUS.ACTIVE,
       permissionIds: [],
+      assignedWorkshops: [],
       assignedPersonnelIds: [],
     }
   }
@@ -353,6 +332,7 @@ export class RoleForm {
       description: record.description,
       status: record.status,
       permissionIds: [...record.permissionIds],
+      assignedWorkshops: RoleForm.fromApiWorkshops(record.assignedWorkshops),
       assignedPersonnelIds: [...record.assignedPersonnelIds],
     }
   }

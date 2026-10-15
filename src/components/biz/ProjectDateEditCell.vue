@@ -10,10 +10,12 @@ const emit = defineEmits<{
 }>()
 
 const editing = ref(false)
+const draftValue = ref('')
 const pickerRef = ref<{ focus?: () => void }>()
 
 async function startEdit() {
   if (props.loading) return
+  draftValue.value = props.modelValue || ''
   editing.value = true
   await nextTick()
   pickerRef.value?.focus?.()
@@ -23,9 +25,12 @@ function stopEdit() {
   editing.value = false
 }
 
-function handleChange(value: string | null) {
+function handlePickerInput(value: string | null) {
+  draftValue.value = value ?? ''
+}
+
+function handleCommit(value: string | null) {
   const next = value ?? ''
-  stopEdit()
   if (next === props.modelValue) return
   emit('change', next)
 }
@@ -50,7 +55,7 @@ function handleVisibleChange(visible: boolean) {
   <el-date-picker
     v-else
     ref="pickerRef"
-    :model-value="modelValue || undefined"
+    v-model="draftValue"
     type="date"
     size="small"
     :disabled="loading"
@@ -59,7 +64,8 @@ function handleVisibleChange(visible: boolean) {
     clearable
     placeholder="-"
     class="project-date-picker"
-    @update:model-value="handleChange"
+    @update:model-value="handlePickerInput"
+    @change="handleCommit"
     @visible-change="handleVisibleChange"
     @click.stop
   />

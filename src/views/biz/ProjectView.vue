@@ -3,36 +3,78 @@ import '@/styles/biz-page-card.css'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
-import { createProject, deleteProject, fetchProjectList, updateProject } from '@/api/projects'
+import { copyProject, createProject, deleteProject, fetchProjectList, splitProject, updateProject } from '@/api/projects'
 import { fetchPersonnelList } from '@/api/personnel'
 import ProjectTable from '@/components/biz/ProjectTable.vue'
+import PersonnelAssignSelect from '@/components/biz/PersonnelAssignSelect.vue'
 import ProjectDetailWorkflowPanel from '@/components/biz/ProjectDetailWorkflowPanel.vue'
+import ProjectContactFormSelect from '@/components/biz/ProjectContactFormSelect.vue'
 import TagSelect from '@/components/biz/TagSelect.vue'
 import { DetailWorkflowForm, ProjectForm } from '@/models/biz/project'
+import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
 import { fetchSystemConfig } from '@/api/system'
 import { BusinessSystemConfig } from '@/models/biz'
 import type { LocalWorkPathConfig } from '@/models/biz'
 import type { PersonnelRecord } from '@/models/personnel'
 import type {
   ProjectAssignee,
-  ProjectGroupBy,
+  ProjectNatureCode,
   ProjectRecord,
 } from '@/models/biz/project'
 import { BIZ_ROUTES } from '@/models/biz/navigation'
 import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
+import { PAGE_SIZE_OPTIONS } from '@/constants/pagination'
 
 const route = useRoute()
 const router = useRouter()
 const submitting = ref(false)
+const splitting = ref(false)
 const projectTableRef = ref<InstanceType<typeof ProjectTable>>()
 const highlightedProjectNo = ref('')
 const editingProjectNo = ref<string | null>(null)
+const copySourceNo = ref<string | null>(null)
+type DialogMode = 'create' | 'edit' | 'copy'
+const dialogMode = ref<DialogMode>('create')
 const editingRecord = ref<ProjectRecord | null>(null)
 const dialogVisible = ref(false)
 const formRef = ref<FormInstance>()
 const form = reactive(ProjectForm.createEmptyForm())
+const naturesSnapshot = ref<ProjectNatureCode[]>([])
+function syncNaturesSnapshot() {
+  naturesSnapshot.value = [...form.natures]
+}
+
+function isSameNatures(left: ProjectNatureCode[], right: ProjectNatureCode[]) {
+  if (left.length !== right.length) return false
+  return left.every((item) => right.includes(item))
+}
+
+function syncWorkPathsForNatureChange() {
+  const nextNatures = [...form.natures]
+  if (isSameNatures(nextNatures, naturesSnapshot.value)) return
+
+  const synced = ProjectWorkPath.syncWorkPathsForNatures(
+    {
+      ...form,
+      natures: nextNatures,
+      isJiagongdan: editingRecord.value?.isJiagongdan ?? false,
+      receivedDate: editingRecord.value?.receivedDate ?? form.plannedStartDate ?? '',
+    },
+    naturesSnapshot.value,
+    localWorkPathConfig.value.pathPatterns,
+  )
+  form.designWorkPath = synced.designWorkPath
+  form.detailWorkPath = synced.detailWorkPath
+  form.localWorkPath = synced.localWorkPath
+  naturesSnapshot.value = nextNatures
+}
+
 const formRules = ProjectForm.FORM_RULES
-const dialogTitle = computed(() => (editingProjectNo.value ? '编辑项目' : '新建项目'))
+const dialogTitle = computed(() => {
+  if (dialogMode.value === 'edit') return '编辑项目'
+  if (dialogMode.value === 'copy') return '复制为新项目'
+  return '新建项目'
+})
 const localWorkPathConfig = ref<LocalWorkPathConfig>({
   ...BusinessSystemConfig.LOCAL_WORK_PATH,
 })
@@ -47,43 +89,89 @@ const searchForm = reactive({
   keyword: '',
   status: '',
   tags: [] as string[],
+  assignedPersonnelId: '',
+  flowFilter: [] as string[],
+  natureFilter: [] as string[],
 })
 
 const statusOptions = ProjectForm.STATUS_OPTIONS
 const statusFormOptions = ProjectForm.STATUS_FORM_OPTIONS
 const natureOptions = ProjectForm.NATURE_OPTIONS
-const groupByOptions = ProjectForm.GROUP_BY_OPTIONS
+const structureTypeOptions = ProjectForm.STRUCTURE_TYPE_OPTIONS
 
 const personnelOptions = ref<PersonnelRecord[]>([])
+let personnelFilterReady = false
+let suppressPersonnelFilterWatch = false
 
-// ── 分页列表（按筛选条件分桶缓存，切换筛选/分组时保留已查数据）──
-const pageSize = 20
+// ── 分页列表（按筛选条件分桶缓存，切换筛选时保留已查数据）──
 const {
+  pageSize,
   filteredData,
   total,
   page,
   loading,
   loadPage: loadCachedPage,
-  loadAll: loadCachedAll,
+  loadMergedFilteredPage,
   loadAroundAnchor: loadCachedAroundAnchor,
   clearFilterCache,
   patchItem,
-  getAllList,
+  getGlobalCachedItems,
   getFilters,
-  cacheRevision,
 } = usePaginatedListCache<ProjectRecord>({
-  pageSize,
   getItemKey: (item) => item.projectNo,
   sortList: ProjectForm.sortForDisplay,
 })
 
-type PaginatedFilters = { keyword?: string; status?: string; tags?: string[] }
+type PaginatedFilters = {
+  keyword?: string
+  status?: string
+  tags?: string[]
+  assignedPersonnelId?: string
+  flowFilters?: string[]
+  natures?: string[]
+}
 
-function buildListQuery(params: PaginatedFilters & { page?: number; pageSize?: number; anchor?: string; all?: boolean }) {
+function hasColumnFilters() {
+  return (
+    searchForm.flowFilter.length > 0 ||
+    searchForm.natureFilter.length > 0 ||
+    Boolean(searchForm.assignedPersonnelId)
+  )
+}
+
+function getCachedMatchingColumnFiltered() {
+  return getGlobalCachedItems().filter((record) => {
+    if (
+      searchForm.assignedPersonnelId &&
+      !ProjectForm.matchesAssignedPersonnelFilter(record, searchForm.assignedPersonnelId)
+    ) {
+      return false
+    }
+    if (
+      searchForm.flowFilter.length &&
+      !ProjectForm.matchesFlowFilters(record, searchForm.flowFilter)
+    ) {
+      return false
+    }
+    if (
+      searchForm.natureFilter.length &&
+      !ProjectForm.matchesNatureFilters(record, searchForm.natureFilter)
+    ) {
+      return false
+    }
+    return true
+  })
+}
+
+function buildListQuery(params: PaginatedFilters & { page?: number; pageSize?: number; anchor?: string; all?: boolean; excludeProjectNos?: string[] }) {
   return {
     keyword: params.keyword,
     status: params.status,
     tags: params.tags,
+    assignedPersonnelId: params.assignedPersonnelId,
+    flowFilters: params.flowFilters,
+    natures: params.natures,
+    excludeProjectNos: params.excludeProjectNos,
     page: params.page,
     pageSize: params.pageSize,
     anchor: params.anchor,
@@ -114,160 +202,40 @@ function buildViewFilters(): PaginatedFilters {
     keyword: searchForm.keyword,
     status: searchForm.status,
     tags: searchForm.tags.length ? [...searchForm.tags] : undefined,
+    assignedPersonnelId: searchForm.assignedPersonnelId || undefined,
+    ...(searchForm.flowFilter.length ? { flowFilters: [...searchForm.flowFilter] } : {}),
+    ...(searchForm.natureFilter.length ? { natures: [...searchForm.natureFilter] } : {}),
   }
 }
 
-async function loadAllForGrouped(nextFilters?: PaginatedFilters, force = false) {
-  return loadCachedAll(
-    (params) => fetchProjectList(buildListQuery({ ...params, all: true })),
-    nextFilters,
+async function loadColumnFilteredPage(pageNo = 1, nextFilters?: PaginatedFilters, force = false) {
+  const filters = nextFilters ?? buildViewFilters()
+  return loadMergedFilteredPage(
+    (params) => fetchProjectList(buildListQuery(params)),
+    pageNo,
+    filters,
+    getCachedMatchingColumnFiltered(),
     force,
   )
 }
 
-async function reloadCurrentView(force = false) {
-  const filters = buildViewFilters()
-  if (isGrouped.value) {
-    await loadAllForGrouped(filters, force)
-    return
+async function loadViewPage(pageNo = 1, nextFilters?: PaginatedFilters, force = false) {
+  const filters = nextFilters ?? buildViewFilters()
+  if (hasColumnFilters()) {
+    return loadColumnFilteredPage(pageNo, filters, force)
   }
-  await loadPage(page.value || 1, filters, force)
+  return loadPage(pageNo, filters, force)
+}
+
+async function reloadCurrentView(pageNo = page.value || 1, force = false) {
+  await loadViewPage(pageNo, buildViewFilters(), force)
 }
 
 const editingAssignedPersonnel = ref<ProjectAssignee[]>([])
-const groupBy = ref<ProjectGroupBy>('')
-
-const isGrouped = computed(() => Boolean(groupBy.value))
-// 分组视图使用筛选桶内全量缓存（loadAll），各 Tab 内再按 pageSize 客户端分页
-const groupDisplayData = computed(() => {
-  void cacheRevision.value
-  const filters = getFilters()
-  return isGrouped.value ? getAllList(filters) : filteredData.value
-})
-const recordGroups = computed(() => ProjectForm.groupRecords(groupDisplayData.value, groupBy.value))
-
-type GroupedMode = Exclude<ProjectGroupBy, ''>
-const activeGroupKey = ref('')
-const activeGroupKeyByMode = ref<Partial<Record<GroupedMode, string>>>({})
-const groupPageByKey = ref<Record<string, number>>({})
-const groupPageByMode = ref<Partial<Record<GroupedMode, Record<string, number>>>>({})
-
-const activeGroup = computed(
-  () => recordGroups.value.find((group) => group.key === activeGroupKey.value) ?? null,
-)
-
-const activeGroupPageData = computed(() => {
-  const group = activeGroup.value
-  if (!group) return []
-  return paginateGroupMembers(group.members, group.key)
-})
-
-function getGroupPage(groupKey: string) {
-  return groupPageByKey.value[groupKey] || 1
-}
-
-function paginateGroupMembers(members: ProjectRecord[], groupKey: string) {
-  const pageNo = getGroupPage(groupKey)
-  const start = (pageNo - 1) * pageSize
-  const sorted = ProjectForm.sortForDisplay(members)
-  return sorted.slice(start, start + pageSize)
-}
-
-function handleGroupPageChange(groupKey: string, nextPage: number) {
-  groupPageByKey.value = {
-    ...groupPageByKey.value,
-    [groupKey]: nextPage,
-  }
-  const mode = groupBy.value
-  if (mode) {
-    groupPageByMode.value[mode] = { ...groupPageByKey.value }
-  }
-}
-
-function clampGroupPages() {
-  if (!groupBy.value) return
-
-  const nextPages = { ...groupPageByKey.value }
-  let changed = false
-
-  for (const group of recordGroups.value) {
-    const maxPage = Math.max(1, Math.ceil(group.members.length / pageSize))
-    const currentPage = nextPages[group.key] || 1
-    if (currentPage > maxPage) {
-      nextPages[group.key] = maxPage
-      changed = true
-    }
-  }
-
-  if (changed) {
-    groupPageByKey.value = nextPages
-    const mode = groupBy.value
-    if (mode) {
-      groupPageByMode.value[mode] = { ...nextPages }
-    }
-  }
-}
-
-function resolveActiveGroupKey(
-  groups: ReturnType<typeof ProjectForm.groupRecords>,
-  mode: ProjectGroupBy,
-) {
-  if (!mode || !groups.length) return ''
-  const saved = activeGroupKeyByMode.value[mode]
-  if (saved && groups.some((group) => group.key === saved)) return saved
-  return groups[0]?.key ?? ''
-}
-
-function resetGroupTabState() {
-  activeGroupKeyByMode.value = {}
-  activeGroupKey.value = ''
-  groupPageByMode.value = {}
-  groupPageByKey.value = {}
-}
-
-function syncActiveGroupKey() {
-  if (!groupBy.value) {
-    activeGroupKey.value = ''
-    return
-  }
-  activeGroupKey.value = resolveActiveGroupKey(recordGroups.value, groupBy.value)
-}
-
-function rememberActiveGroupKey() {
-  const mode = groupBy.value
-  if (mode && activeGroupKey.value) {
-    activeGroupKeyByMode.value[mode] = activeGroupKey.value
-  }
-}
-
-type PersonnelSelectOption = {
-  id: string
-  name: string
-  team: string
-}
-
-const personnelSelectOptions = computed((): PersonnelSelectOption[] => {
-  const optionMap = new Map<string, PersonnelSelectOption>()
-
-  for (const person of personnelOptions.value) {
-    optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-  }
-
-  for (const person of editingAssignedPersonnel.value) {
-    if (!optionMap.has(person.id)) {
-      optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-    }
-  }
-
-  return [...optionMap.values()].sort((a, b) => {
-    const teamCompare = a.team.localeCompare(b.team, 'zh-CN')
-    return teamCompare !== 0 ? teamCompare : a.name.localeCompare(b.name, 'zh-CN')
-  })
-})
 
 async function loadProjects(force = false) {
   try {
-    await reloadCurrentView(force)
+    await reloadCurrentView(page.value || 1, force)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
   }
@@ -275,7 +243,7 @@ async function loadProjects(force = false) {
 
 async function handlePageChange(nextPage: number) {
   try {
-    await loadPage(nextPage, getFilters())
+    await loadViewPage(nextPage)
     highlightedProjectNo.value = ''
     nextTick(() => projectTableRef.value?.tableRef?.setScrollTop(0))
   } catch (error) {
@@ -283,33 +251,74 @@ async function handlePageChange(nextPage: number) {
   }
 }
 
+async function handleSizeChange() {
+  try {
+    await loadViewPage(1)
+    highlightedProjectNo.value = ''
+    nextTick(() => projectTableRef.value?.tableRef?.setScrollTop(0))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
+  }
+}
+
+async function handleColumnFilterChange() {
+  try {
+    await loadViewPage(1, buildViewFilters(), true)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
+  }
+}
+
+function stillMatchesColumnFilters(record: ProjectRecord) {
+  if (
+    searchForm.assignedPersonnelId &&
+    !ProjectForm.matchesAssignedPersonnelFilter(record, searchForm.assignedPersonnelId)
+  ) {
+    return false
+  }
+  if (
+    searchForm.flowFilter.length &&
+    !ProjectForm.matchesFlowFilters(record, searchForm.flowFilter)
+  ) {
+    return false
+  }
+  if (
+    searchForm.natureFilter.length &&
+    !ProjectForm.matchesNatureFilters(record, searchForm.natureFilter)
+  ) {
+    return false
+  }
+  return true
+}
+
 async function handleSearch() {
   if (route.query.projectNo || route.query.projectNos) {
     router.replace({ path: BIZ_ROUTES.project })
   }
-  resetGroupTabState()
-  const filters = buildViewFilters()
   try {
-    if (isGrouped.value) {
-      await loadAllForGrouped(filters, true)
-    } else {
-      await loadPage(1, filters, true)
-    }
+    await loadViewPage(1, buildViewFilters(), true)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
   }
 }
 
 async function handleReset() {
+  suppressPersonnelFilterWatch = true
   searchForm.keyword = ''
   searchForm.status = ''
   searchForm.tags = []
+  searchForm.assignedPersonnelId = ''
+  searchForm.flowFilter = []
+  searchForm.natureFilter = []
   highlightedProjectNo.value = ''
-  resetGroupTabState()
   if (route.query.projectNo || route.query.projectNos) {
     router.replace({ path: BIZ_ROUTES.project })
   }
-  await loadProjects()
+  try {
+    await loadProjects()
+  } finally {
+    suppressPersonnelFilterWatch = false
+  }
 }
 
 function handlePathUpdated(
@@ -331,6 +340,9 @@ function handleNatureUpdated(updated: ProjectRecord) {
     ...item,
     ...updated,
   }))
+  if (hasColumnFilters() && !stillMatchesColumnFilters(updated)) {
+    void reloadCurrentView(page.value, true)
+  }
 }
 
 function handleDateUpdated(updated: ProjectRecord) {
@@ -345,6 +357,9 @@ function handlePersonnelUpdated(updated: ProjectRecord) {
     ...item,
     ...updated,
   }))
+  if (hasColumnFilters() && !stillMatchesColumnFilters(updated)) {
+    void reloadCurrentView(page.value, true)
+  }
 }
 
 function handleStatusUpdated(updated: ProjectRecord) {
@@ -352,6 +367,9 @@ function handleStatusUpdated(updated: ProjectRecord) {
     ...item,
     ...updated,
   }))
+  if (hasColumnFilters() && !stillMatchesColumnFilters(updated)) {
+    void reloadCurrentView(page.value, true)
+  }
 }
 
 async function handleDelete(row: ProjectRecord) {
@@ -376,11 +394,7 @@ async function handleDelete(row: ProjectRecord) {
       highlightedProjectNo.value = ''
     }
     const nextPage = filteredData.value.length <= 1 && page.value > 1 ? page.value - 1 : page.value
-    if (isGrouped.value) {
-      await loadAllForGrouped(activeFilters, true)
-    } else {
-      await loadPage(nextPage, activeFilters, true)
-    }
+    await loadViewPage(nextPage, activeFilters, true)
     ElMessage.success('项目已删除')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '删除项目失败')
@@ -389,7 +403,7 @@ async function handleDelete(row: ProjectRecord) {
 
 async function loadPersonnelOptions() {
   try {
-    personnelOptions.value = await fetchPersonnelList()
+    personnelOptions.value = await fetchPersonnelList({ status: 'active' })
   } catch {
     personnelOptions.value = []
   }
@@ -415,31 +429,103 @@ async function loadSystemConfig() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadPersonnelOptions(), loadSystemConfig()])
-  await bootstrapProjects()
+  await Promise.all([
+    loadPersonnelOptions(),
+    loadSystemConfig(),
+    bootstrapProjects(),
+  ])
+  personnelFilterReady = true
 })
 
 function openCreateDialog() {
+  dialogMode.value = 'create'
+  copySourceNo.value = null
   editingProjectNo.value = null
   editingRecord.value = null
   editingAssignedPersonnel.value = []
   Object.assign(form, ProjectForm.createEmptyForm())
+  syncNaturesSnapshot()
   dialogVisible.value = true
 }
 
 function openEditDialog(row: ProjectRecord) {
+  dialogMode.value = 'edit'
+  copySourceNo.value = null
   editingProjectNo.value = row.projectNo
   editingRecord.value = ProjectForm.cloneRecord(row)
   editingAssignedPersonnel.value = row.assignedPersonnel.map((person) => ({ ...person }))
   Object.assign(form, ProjectForm.createFormFromRecord(row))
+  syncNaturesSnapshot()
   dialogVisible.value = true
 }
 
+async function openCopyDialog(row: ProjectRecord) {
+  dialogMode.value = 'copy'
+  copySourceNo.value = row.projectNo
+  editingProjectNo.value = null
+  editingRecord.value = ProjectForm.cloneRecord(row)
+  editingAssignedPersonnel.value = row.assignedPersonnel.map((person) => ({ ...person }))
+  try {
+    const result = await fetchProjectList({ all: true })
+    Object.assign(
+      form,
+      ProjectForm.createFormForCopy(
+        row,
+        result.list.map((item) => item.projectNo),
+      ),
+    )
+    syncNaturesSnapshot()
+    dialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目列表失败')
+  }
+}
+
+async function handleCopyAsNew() {
+  if (!editingRecord.value) return
+  await openCopyDialog(editingRecord.value)
+}
+
+async function refreshAfterProjectMutation() {
+  const activeFilters = getFilters()
+  clearFilterCache(activeFilters)
+  await loadViewPage(1, activeFilters, true)
+}
+
+async function handleSplit() {
+  if (!editingProjectNo.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      '将把当前项目拆分为两个独立项目：原项目保留联系单，新项目不复制联系单。若项目号尚无 -1 后缀，将自动改名为「根号-1」并创建「根号-2」。是否继续？',
+      '拆分项目',
+      { type: 'warning', confirmButtonText: '拆分', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  splitting.value = true
+  try {
+    const { original, clone } = await splitProject(editingProjectNo.value)
+    dialogVisible.value = false
+    await refreshAfterProjectMutation()
+    ElMessage.success(`已拆分：${original.projectNo}、${clone.projectNo}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '拆分项目失败')
+  } finally {
+    splitting.value = false
+  }
+}
+
 function handleDialogClose() {
+  dialogMode.value = 'create'
+  copySourceNo.value = null
   editingProjectNo.value = null
   editingRecord.value = null
   editingAssignedPersonnel.value = []
   Object.assign(form, ProjectForm.createEmptyForm())
+  naturesSnapshot.value = []
   formRef.value?.clearValidate()
 }
 
@@ -450,8 +536,8 @@ function handleWorkflowUpdated(record: ProjectRecord) {
   replaceProjectInTable(record)
 }
 
-function replaceProjectInTable(updated: ProjectRecord) {
-  patchItem(updated.projectNo, () => updated)
+function replaceProjectInTable(updated: ProjectRecord, originalProjectNo?: string) {
+  patchItem(originalProjectNo ?? updated.projectNo, () => updated)
 }
 
 async function handleSubmit() {
@@ -461,8 +547,9 @@ async function handleSubmit() {
   submitting.value = true
   try {
     const primaryWorkPath = form.detailWorkPath || form.designWorkPath
-    if (editingProjectNo.value) {
-      const updated = await updateProject(editingProjectNo.value, {
+    if (dialogMode.value === 'copy' && copySourceNo.value) {
+      const created = await copyProject(copySourceNo.value, {
+        projectNo: form.projectNo.trim(),
         name: form.name.trim(),
         status: form.status,
         designCompleted: form.designCompleted,
@@ -477,8 +564,43 @@ async function handleSubmit() {
         designWorkPath: form.designWorkPath,
         detailWorkPath: form.detailWorkPath,
         localWorkPath: primaryWorkPath,
+        drawingIssueEnabled: form.drawingIssueEnabled,
+        drawingIssueYearMonth: form.drawingIssueYearMonth,
+        structureType: form.structureType || '',
+        estimatedWeightTons: form.estimatedWeightTons,
+        clearActualDates: true,
       })
-      replaceProjectInTable(updated)
+      await refreshAfterProjectMutation()
+      dialogVisible.value = false
+      ElMessage.success(`已复制为新项目：${created.projectNo}`)
+      return
+    }
+
+    if (editingProjectNo.value) {
+      const originalProjectNo = editingProjectNo.value
+      const updated = await updateProject(originalProjectNo, {
+        projectNo: form.projectNo.trim(),
+        name: form.name.trim(),
+        status: form.status,
+        designCompleted: form.designCompleted,
+        detailCompleted: form.detailCompleted,
+        natures: [...form.natures],
+        tagIds: [...form.tagIds],
+        assignedPersonnelIds: [...form.assignedPersonnelIds],
+        contactFormIds: [...form.contactFormIds],
+        plannedStartDate: form.plannedStartDate,
+        plannedEndDate: form.plannedEndDate,
+        actualStartDate: form.actualStartDate,
+        actualEndDate: form.actualEndDate,
+        designWorkPath: form.designWorkPath,
+        detailWorkPath: form.detailWorkPath,
+        localWorkPath: primaryWorkPath,
+        drawingIssueEnabled: form.drawingIssueEnabled,
+        drawingIssueYearMonth: form.drawingIssueYearMonth,
+        structureType: form.structureType || '',
+        estimatedWeightTons: form.estimatedWeightTons,
+      })
+      replaceProjectInTable(updated, originalProjectNo)
       dialogVisible.value = false
       ElMessage.success('项目已更新')
       return
@@ -500,23 +622,23 @@ async function handleSubmit() {
       designWorkPath: form.designWorkPath,
       detailWorkPath: form.detailWorkPath,
       localWorkPath: primaryWorkPath,
+      drawingIssueEnabled: form.drawingIssueEnabled,
+      drawingIssueYearMonth: form.drawingIssueYearMonth,
+      structureType: form.structureType || '',
+      estimatedWeightTons: form.estimatedWeightTons,
     })
-    const activeFilters = getFilters()
-    clearFilterCache(activeFilters)
-    if (isGrouped.value) {
-      await loadAllForGrouped(activeFilters, true)
-    } else {
-      await loadPage(1, activeFilters, true)
-    }
+    await refreshAfterProjectMutation()
     dialogVisible.value = false
     ElMessage.success('项目已创建')
   } catch (error) {
     ElMessage.error(
       error instanceof Error
         ? error.message
-        : editingProjectNo.value
-          ? '更新项目失败'
-          : '创建项目失败',
+        : dialogMode.value === 'copy'
+          ? '复制项目失败'
+          : editingProjectNo.value
+            ? '更新项目失败'
+            : '创建项目失败',
     )
   } finally {
     submitting.value = false
@@ -551,6 +673,8 @@ async function applyProjectNoFromRoute() {
 
     searchForm.keyword = ''
     searchForm.status = ''
+    searchForm.flowFilter = []
+    searchForm.natureFilter = []
     highlightedProjectNo.value = normalizeHighlightProjectNo(
       typeof projectNo === 'string' && projectNo ? projectNo : anchor,
     )
@@ -567,6 +691,8 @@ async function applyProjectNoFromRoute() {
   if (typeof projectNo === 'string' && projectNo) {
     searchForm.keyword = ''
     searchForm.status = ''
+    searchForm.flowFilter = []
+    searchForm.natureFilter = []
     highlightedProjectNo.value = normalizeHighlightProjectNo(projectNo)
 
     try {
@@ -597,45 +723,26 @@ watch(
     if (!ProjectForm.hasDetailGroupNature({ natures })) {
       form.detailCompleted = false
     }
+    syncWorkPathsForNatureChange()
   },
 )
 
-watch(groupBy, (mode, prevMode) => {
-  if (prevMode) {
-    const previousKey = activeGroupKey.value
-    if (previousKey) {
-      activeGroupKeyByMode.value[prevMode] = previousKey
+watch(
+  () => form.drawingIssueEnabled,
+  (enabled) => {
+    if (!enabled) {
+      form.drawingIssueYearMonth = ''
     }
-    if (Object.keys(groupPageByKey.value).length) {
-      groupPageByMode.value[prevMode] = { ...groupPageByKey.value }
-    }
-  }
+  },
+)
 
-  if (mode) {
-    groupPageByKey.value = { ...(groupPageByMode.value[mode] ?? {}) }
-    syncActiveGroupKey()
-    void loadAllForGrouped(getFilters()).catch((error) => {
-      ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
-    })
-    return
-  }
-
-  groupPageByKey.value = {}
-  void loadPage(page.value || 1, getFilters()).catch((error) => {
-    ElMessage.error(error instanceof Error ? error.message : '加载项目数据失败')
-  })
-})
-
-watch(recordGroups, () => {
-  if (!groupBy.value) return
-  const nextKey = resolveActiveGroupKey(recordGroups.value, groupBy.value)
-  if (nextKey !== activeGroupKey.value) {
-    activeGroupKey.value = nextKey
-  }
-  clampGroupPages()
-})
-
-watch(activeGroupKey, rememberActiveGroupKey)
+watch(
+  () => searchForm.assignedPersonnelId,
+  () => {
+    if (!personnelFilterReady || suppressPersonnelFilterWatch) return
+    void handleColumnFilterChange()
+  },
+)
 </script>
 
 <template>
@@ -676,30 +783,24 @@ watch(activeGroupKey, rememberActiveGroupKey)
           <el-button type="primary" @click="handleSearch">查询</el-button>
           <el-button @click="handleReset">重置</el-button>
         </el-form-item>
-        <el-form-item label="分组">
-          <el-select v-model="groupBy" style="width: 130px">
-            <el-option
-              v-for="item in groupByOptions"
-              :key="item.value || 'list'"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
-        </el-form-item>
       </el-form>
       <span class="search-total">共 {{ total }} 条</span>
     </div>
 
-    <div v-if="!isGrouped" class="project-view-body project-list-panel">
+    <div class="project-view-body project-list-panel">
       <div class="table-scroll">
         <ProjectTable
           ref="projectTableRef"
+          v-model:assigned-personnel-id="searchForm.assignedPersonnelId"
+          v-model:flow-status-filter="searchForm.flowFilter"
+          v-model:nature-filter="searchForm.natureFilter"
           :data="filteredData"
           :loading="loading"
           :show-nature="true"
           :show-personnel="true"
           :personnel-options="personnelOptions"
           :highlighted-project-no="highlightedProjectNo"
+          @column-filter-change="handleColumnFilterChange"
           @edit="openEditDialog"
           @delete="handleDelete"
           @nature-updated="handleNatureUpdated"
@@ -712,64 +813,15 @@ watch(activeGroupKey, rememberActiveGroupKey)
       <div class="table-pagination">
         <el-pagination
           v-model:current-page="page"
-          :page-size="pageSize"
+          v-model:page-size="pageSize"
+          :page-sizes="[...PAGE_SIZE_OPTIONS]"
           :total="total"
-          layout="total, prev, pager, next, jumper"
+          layout="total, sizes, prev, pager, next, jumper"
           background
+          @size-change="handleSizeChange"
           @current-change="handlePageChange"
         />
       </div>
-    </div>
-
-    <div v-else v-loading="loading" class="project-view-body record-group-panel">
-      <el-tabs
-        v-if="recordGroups.length"
-        v-model="activeGroupKey"
-        class="record-group-tabs"
-      >
-        <el-tab-pane
-          v-for="group in recordGroups"
-          :key="group.key"
-          :name="group.key"
-        >
-          <template #label>
-            <span class="record-group-tab-label">
-              {{ group.label }}
-              <span class="record-group-tab-count">{{ group.members.length }}</span>
-            </span>
-          </template>
-        </el-tab-pane>
-      </el-tabs>
-      <div v-if="activeGroup" class="record-group-content">
-        <div class="table-scroll">
-          <ProjectTable
-            :data="activeGroupPageData"
-            table-height="100%"
-            :show-nature="groupBy !== 'nature'"
-            :show-personnel="groupBy !== 'personnel'"
-            :personnel-options="personnelOptions"
-            :highlighted-project-no="highlightedProjectNo"
-            @edit="openEditDialog"
-            @delete="handleDelete"
-            @nature-updated="handleNatureUpdated"
-            @personnel-updated="handlePersonnelUpdated"
-            @status-updated="handleStatusUpdated"
-            @date-updated="handleDateUpdated"
-            @path-updated="handlePathUpdated"
-          />
-        </div>
-        <div class="table-pagination">
-          <el-pagination
-            :current-page="getGroupPage(activeGroup.key)"
-            :page-size="pageSize"
-            :total="activeGroup.members.length"
-            layout="total, prev, pager, next, jumper"
-            background
-            @current-change="(nextPage) => handleGroupPageChange(activeGroup.key, nextPage)"
-          />
-        </div>
-      </div>
-      <el-empty v-else-if="!loading" class="record-group-empty" description="暂无匹配项目" />
     </div>
   </el-card>
 
@@ -782,30 +834,31 @@ watch(activeGroupKey, rememberActiveGroupKey)
   >
     <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
       <el-form-item label="项目号" prop="projectNo">
-        <el-input
-          :model-value="editingProjectNo ? ProjectForm.getDisplayProjectNo({ projectNo: form.projectNo, baseProjectNo: '' }) : form.projectNo"
-          placeholder="请输入项目号"
-          :disabled="!!editingProjectNo"
-          @update:model-value="(value: string) => { if (!editingProjectNo) form.projectNo = value }"
-        />
+        <el-input v-model="form.projectNo" placeholder="请输入项目号" />
       </el-form-item>
       <el-form-item label="项目名称" prop="name">
         <el-input v-model="form.name" placeholder="请输入项目名称" />
+      </el-form-item>
+      <el-form-item v-if="dialogMode === 'edit'" label="关联联系单">
+        <ProjectContactFormSelect
+          v-model="form.contactFormIds"
+          :display-project-no="ProjectForm.getDisplayProjectNo(editingRecord || { projectNo: form.projectNo, baseProjectNo: form.projectNo })"
+        />
       </el-form-item>
       <el-form-item label="本地路径">
         <div class="local-path-group">
           <template v-if="form.natures.includes(ProjectForm.NATURE.DESIGN)">
             <div class="local-path-item">
-              <div class="local-path-item__label">设计路径</div>
+              <div class="local-path-item__label">设计归档路径</div>
               <el-input
                 v-model="form.designWorkPath"
                 type="textarea"
                 :rows="2"
-                placeholder="设计相对路径"
+                placeholder="设计归档相对路径"
                 class="local-path-input"
               />
               <div class="form-hint">
-                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                全局配置：{{ localWorkPathConfig.ip }}
                 <template v-if="designWorkPathPreview">
                   · 完整路径 {{ designWorkPathPreview }}
                 </template>
@@ -814,16 +867,16 @@ watch(activeGroupKey, rememberActiveGroupKey)
           </template>
           <template v-if="ProjectForm.hasDetailGroupNature(form)">
             <div class="local-path-item">
-              <div class="local-path-item__label">细化路径</div>
+              <div class="local-path-item__label">细化归档路径</div>
               <el-input
                 v-model="form.detailWorkPath"
                 type="textarea"
                 :rows="2"
-                placeholder="细化相对路径"
+                placeholder="细化归档相对路径"
                 class="local-path-input"
               />
               <div class="form-hint">
-                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                全局配置：{{ localWorkPathConfig.ip }}
                 <template v-if="detailWorkPathPreview">
                   · 完整路径 {{ detailWorkPathPreview }}
                 </template>
@@ -831,7 +884,7 @@ watch(activeGroupKey, rememberActiveGroupKey)
             </div>
           </template>
           <div v-if="!form.natures.length" class="form-hint">
-            请先选择项目性质，再填写对应的设计路径或细化路径。
+            请先选择项目性质，再填写对应的设计归档路径或细化归档路径。
           </div>
         </div>
       </el-form-item>
@@ -850,23 +903,15 @@ watch(activeGroupKey, rememberActiveGroupKey)
         <TagSelect v-model="form.tagIds" />
       </el-form-item>
       <el-form-item label="分配人员">
-        <el-select
+        <PersonnelAssignSelect
           v-model="form.assignedPersonnelIds"
-          multiple
-          filterable
+          :personnel-options="personnelOptions"
+          :extra-assignees="editingAssignedPersonnel"
           :collapse-tags="!editingProjectNo"
           :collapse-tags-tooltip="!editingProjectNo"
           placeholder="从人员系统选择分配人员"
           class="personnel-select"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="person in personnelSelectOptions"
-            :key="person.id"
-            :label="`${person.name} · ${person.team}`"
-            :value="person.id"
-          />
-        </el-select>
+        />
       </el-form-item>
       <el-form-item label="流程状态">
         <el-radio-group v-model="form.status">
@@ -894,13 +939,53 @@ watch(activeGroupKey, rememberActiveGroupKey)
         </div>
       </el-form-item>
       <el-form-item
-        v-if="editingRecord && DetailWorkflowForm.needsDetailWorkflow(editingRecord.natures)"
+        v-if="dialogMode === 'edit' && editingRecord && DetailWorkflowForm.needsDetailWorkflow(editingRecord.natures)"
         label="细化流程"
       >
         <ProjectDetailWorkflowPanel
           :record="editingRecord"
-          :preview-natures="form.natures"
           @updated="handleWorkflowUpdated"
+        />
+      </el-form-item>
+      <el-form-item label="发图计划">
+        <div class="drawing-issue-fields">
+          <el-checkbox v-model="form.drawingIssueEnabled">
+            是否发图
+          </el-checkbox>
+          <el-date-picker
+            v-model="form.drawingIssueYearMonth"
+            type="month"
+            placeholder="选择发图年月"
+            value-format="YYYY-MM"
+            format="YYYY年M月"
+            :disabled="!form.drawingIssueEnabled"
+            style="width: 180px"
+          />
+        </div>
+      </el-form-item>
+      <el-form-item label="结构形式">
+        <el-select
+          v-model="form.structureType"
+          clearable
+          placeholder="选择结构形式"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="item in structureTypeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="预估重量">
+        <el-input-number
+          v-model="form.estimatedWeightTons"
+          :min="0"
+          :precision="3"
+          :controls="false"
+          placeholder="吨"
+          style="width: 100%"
         />
       </el-form-item>
       <el-form-item label="计划开始">
@@ -942,10 +1027,18 @@ watch(activeGroupKey, rememberActiveGroupKey)
     </el-form>
 
     <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="handleSubmit">
-        {{ editingProjectNo ? '保存' : '提交' }}
-      </el-button>
+      <div class="project-dialog-footer">
+        <div v-if="dialogMode === 'edit'" class="project-dialog-footer__left">
+          <el-button @click="handleCopyAsNew">复制为新项目</el-button>
+          <el-button :loading="splitting" @click="handleSplit">拆分项目</el-button>
+        </div>
+        <div class="project-dialog-footer__right">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="handleSubmit">
+            {{ dialogMode === 'edit' ? '保存' : dialogMode === 'copy' ? '复制' : '提交' }}
+          </el-button>
+        </div>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -983,11 +1076,10 @@ watch(activeGroupKey, rememberActiveGroupKey)
   word-break: break-all;
 }
 
-/* 列表 / 分组共用内容区高度，避免 card 撑高导致页面级滚动 */
+/* 列表内容区高度，避免 card 撑高导致页面级滚动 */
 .project-view-body {
   --project-pagination-height: 48px;
   --project-table-height: calc(100vh - 300px);
-  --project-data-block-height: calc(var(--project-table-height) + var(--project-pagination-height));
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -999,82 +1091,8 @@ watch(activeGroupKey, rememberActiveGroupKey)
   overflow: hidden;
 }
 
-.record-group-panel {
-  height: var(--project-data-block-height);
-  gap: 0;
-}
-
-.record-group-content {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.record-group-panel .table-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.record-group-panel .table-pagination {
-  flex-shrink: 0;
-  margin-top: 12px;
-}
-
-.record-group-empty {
-  flex: 1;
-  min-height: 0;
-}
-
-.record-group-tabs {
-  flex-shrink: 0;
-}
-
-.record-group-tabs :deep(.el-tabs__header) {
-  margin-bottom: 6px;
-}
-
-.record-group-tabs :deep(.el-tabs__nav-wrap::after) {
-  height: 1px;
-}
-
-.record-group-tabs :deep(.el-tabs__item) {
-  height: 26px;
-  padding: 0 8px;
-  font-size: 12px;
-  line-height: 26px;
-}
-
-.record-group-tabs :deep(.el-tabs__active-bar) {
-  height: 2px;
-}
-
-.record-group-tab-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.record-group-tab-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 14px;
-  padding: 0 4px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color);
-  border-radius: 7px;
-}
-
-.record-group-tabs :deep(.el-tabs__item.is-active) .record-group-tab-count {
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
+.personnel-select {
+  width: 100%;
 }
 
 .personnel-select :deep(.el-select__tags) {
@@ -1086,6 +1104,28 @@ watch(activeGroupKey, rememberActiveGroupKey)
   display: flex;
   flex-wrap: wrap;
   gap: 12px 20px;
+}
+
+.drawing-issue-fields {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.project-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.project-dialog-footer__left,
+.project-dialog-footer__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 </style>

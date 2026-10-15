@@ -9,6 +9,7 @@ export interface LeaveCalendarResponse {
     name: string
     employeeNo: string
     team: string
+    workshop?: string
     position: string
     nationality: string
     status: string

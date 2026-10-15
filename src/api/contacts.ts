@@ -3,14 +3,12 @@ import type {
   CancelScope,
   ContactRecord,
   ContactRelationType,
-  ContactStatus,
   PdfUploadPayload,
   ProjectMode,
 } from '@/models/biz/contact'
 
 export interface ContactQuery {
   keyword?: string
-  status?: string
   assignedPersonnelId?: string
   tags?: string[]
   page?: number
@@ -43,17 +41,22 @@ export interface CreateContactPayload {
 export interface UpdateContactPayload {
   id?: string
   title?: string
+  createdAt?: string
   receivedDate?: string
   urgency?: string
   content?: string
   expectReplyDate?: string
-  status?: ContactStatus
+  relationType?: ContactRelationType
+  parentId?: string | null
   projectNos?: string[]
   tagIds?: string[]
   primaryPdf?: PdfUploadPayload
+  supplementFiles?: PdfUploadPayload[]
+  removedAttachmentIds?: string[]
 }
 
 export interface CreateChildContactPayload {
+  id?: string
   title: string
   receivedDate: string
   urgency?: string
@@ -84,7 +87,6 @@ export function checkContactPdfMd5(md5: string) {
 export function fetchContactList(params: ContactQuery = {}) {
   const query = new URLSearchParams()
   if (params.keyword) query.set('keyword', params.keyword)
-  if (params.status) query.set('status', params.status)
   if (params.assignedPersonnelId) query.set('assignedPersonnelId', params.assignedPersonnelId)
   if (params.tags?.length) query.set('tags', params.tags.join(','))
   if (params.page) query.set('page', String(params.page))

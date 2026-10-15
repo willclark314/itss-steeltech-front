@@ -1,20 +1,34 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import UserMenu from '@/components/UserMenu.vue'
 import LayoutTabs from '@/components/LayoutTabs.vue'
+import {
+  APP_PAGES,
+  APP_SYSTEMS,
+  DEV_APP_PAGES,
+  resolveSystemIdFromPath,
+  type AppPageDefinition,
+  type AppSystemId,
+} from '@/models/navigation/appNavigation'
 import { getUser, isAdminUser } from '@/utils/auth'
+import {
+  buildOrderedAccessiblePages,
+  getNavigationOrderRef,
+  loadNavigationOrder,
+  sortSystemsByNavigationOrder,
+} from '@/utils/navigationOrder'
+import { filterAccessiblePages } from '@/utils/permission'
 
 const route = useRoute()
 const router = useRouter()
+const navigationOrder = getNavigationOrderRef()
 
 const isCollapsed = ref(false)
 const MENU_ICON_WIDTH = 20
 const MENU_SIDE_PADDING = 16
 const collapsedAsideWidth = MENU_ICON_WIDTH + MENU_SIDE_PADDING * 2
 const asideWidth = computed(() => (isCollapsed.value ? `${collapsedAsideWidth}px` : '220px'))
-
-type SystemId = 'production' | 'business' | 'personnel' | 'system' | 'development'
 
 interface MenuItem {
   path: string
@@ -23,93 +37,55 @@ interface MenuItem {
 }
 
 const isDev = import.meta.env.DEV
+const currentUser = computed(() => getUser())
 
-// ── 当前用户权限 ──
-const isAdminUserFlag = isAdminUser(getUser())
+const accessiblePages = computed<AppPageDefinition[]>(() => {
+  const pages = filterAccessiblePages(APP_PAGES, currentUser.value)
+  const devPages =
+    isDev && isAdminUser(currentUser.value) ? DEV_APP_PAGES : []
+  void navigationOrder.value
+  return buildOrderedAccessiblePages(pages, devPages)
+})
 
 const systems = computed(() => {
-  const list: { id: SystemId; name: string }[] = [
-    { id: 'production', name: '门户' },
-    { id: 'business', name: '业务系统' },
-    { id: 'personnel', name: '人员系统' },
-  ]
-  // 仅管理员可见：系统设置、开发
-  if (isAdminUserFlag) {
-    list.push({ id: 'system', name: '系统设置' })
-    if (isDev) {
-      list.push({ id: 'development', name: '开发' })
-    }
+  const accessibleSystemIds = new Set(accessiblePages.value.map((page) => page.systemId))
+  const list = sortSystemsByNavigationOrder(
+    APP_SYSTEMS.filter((system) => accessibleSystemIds.has(system.id)),
+  )
+  if (isDev && isAdminUser(currentUser.value) && accessibleSystemIds.has('development')) {
+    list.push({ id: 'development', name: '开发' })
   }
   return list
 })
 
-function resolveSystemFromPath(path: string): SystemId {
-  if (path.startsWith('/dev')) return 'development'
-  if (path.startsWith('/system')) return 'system'
-  if (path.startsWith('/business')) return 'business'
-  if (path.startsWith('/personnel')) return 'personnel'
-  if (path.startsWith('/portal') || path === '/home') return 'production'
-  return 'production'
-}
+const activeSystem = ref<AppSystemId>(resolveSystemIdFromPath(route.path))
 
-const activeSystem = ref(resolveSystemFromPath(route.path))
-
-const menuItemsBySystem = computed<Record<SystemId, MenuItem[]>>(() => ({
-  production: [
-    { path: '/home', title: '首页', icon: 'House' },
-    { path: '/portal/my', title: '我的', icon: 'User' },
-    { path: '/portal/about', title: '关于', icon: 'InfoFilled' },
-    { path: '/portal/guide', title: '说明', icon: 'QuestionFilled' },
-  ],
-  business: isAdminUserFlag
-    ? [
-        { path: '/business/contact-browse', title: '联系单', icon: 'Message' },
-        { path: '/business/contact', title: '联系单管理', icon: 'EditPen' },
-        { path: '/business/project-browse', title: '项目', icon: 'Briefcase' },
-        { path: '/business/project', title: '项目管理', icon: 'Folder' },
-        { path: '/business/schedule', title: '工作安排', icon: 'Calendar' },
-        { path: '/business/detail-team-schedule', title: '细化组排班', icon: 'Grid' },
-      ]
-    : [
-        { path: '/business/contact-browse', title: '联系单', icon: 'Message' },
-        { path: '/business/project-browse', title: '项目', icon: 'Briefcase' },
-      ],
-  personnel: isAdminUserFlag
-    ? [
-        { path: '/personnel/person', title: '人员', icon: 'Avatar' },
-        { path: '/personnel/role', title: '角色', icon: 'Key' },
-        { path: '/personnel/leave', title: '年休', icon: 'Calendar' },
-        { path: '/personnel/monthly-rest', title: '月休', icon: 'Document' },
-      ]
-    : [
-        { path: '/personnel/leave', title: '年休', icon: 'Calendar' },
-        { path: '/personnel/monthly-rest', title: '月休', icon: 'Document' },
-      ],
-  system: [
-    { path: '/system/settings', title: '全局配置', icon: 'Setting' },
-  ],
-  development: isDev
-    ? [
-        { path: '/dev/page1', title: '浏览器储存', icon: 'Document' },
-        { path: '/dev/page3', title: '开发页面3', icon: 'Folder' },
-        { path: '/dev/login', title: '登录页面', icon: 'User' },
-        { path: '/dev/error', title: '错误页面', icon: 'Warning' },
-      ]
-    : [],
-}))
-
-const menuItems = computed(() => menuItemsBySystem.value[activeSystem.value])
+const menuItems = computed<MenuItem[]>(() =>
+  accessiblePages.value
+    .filter((page) => page.systemId === activeSystem.value)
+    .map((page) => ({
+      path: page.path,
+      title: page.pageName,
+      icon: page.icon,
+    })),
+)
 
 const activeMenu = computed(() => route.path)
 
 watch(
   () => route.path,
   (path) => {
-    activeSystem.value = resolveSystemFromPath(path)
+    activeSystem.value = resolveSystemIdFromPath(path)
   },
 )
 
-function selectSystem(systemId: SystemId) {
+watch(systems, (nextSystems) => {
+  if (!nextSystems.some((system) => system.id === activeSystem.value)) {
+    activeSystem.value = nextSystems[0]?.id ?? 'portal'
+  }
+})
+
+function selectSystem(systemId: AppSystemId) {
   activeSystem.value = systemId
 }
 
@@ -120,6 +96,10 @@ function toggleSidebar() {
 function goHome() {
   router.push('/home')
 }
+
+onMounted(() => {
+  void loadNavigationOrder()
+})
 </script>
 
 <template>

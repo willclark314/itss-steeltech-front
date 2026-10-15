@@ -5,7 +5,7 @@
  * 数据流：loadPersonnel（一次性）→ loadCalendarData（按年刷新）
  * 工具栏人员按钮在首次加载后固定；换年只更新 disable 态与日历，不增删按钮。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchPersonnelList } from '@/api/personnel'
 import { PersonnelForm, PersonnelLeaveForm } from '@/models/personnel'
@@ -30,6 +30,7 @@ import {
 import LeaveEditDialog from '@/components/personnel/LeaveEditDialog.vue'
 import LeaveYearCalendarPanel from '@/components/personnel/LeaveYearCalendarPanel.vue'
 import { getUser, isAdminUser } from '@/utils/auth'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 const teamOptions = PersonnelForm.TEAM_OPTIONS
 
@@ -69,7 +70,7 @@ function calendarPersonToRecord(
     passportExpiry: '',
     position: person.position || '',
     nationality: (person.nationality || '中国') as PersonnelRecord['nationality'],
-    workshop: PersonnelForm.WORKSHOP,
+    workshop: PersonnelForm.resolveWorkshopByTeam(person.team || '', person.workshop || ''),
     team: person.team || '',
     birthDate: '',
     age: 0,
@@ -256,14 +257,16 @@ function commitMemberViewState(data: LeaveCalendarResponse, displayYear: number)
 }
 
 function applyPersonnelList(list: PersonnelRecord[]) {
-  personnelList.value = list
-  personnelIds.value = list.map((item) => item.id)
+  // 年休页暂只纳入钢结构技术科（不含开发人员等其他科室）
+  const scopedList = PersonnelForm.filterByWorkshop(list, PersonnelForm.WORKSHOP)
+  personnelList.value = scopedList
+  personnelIds.value = scopedList.map((item) => item.id)
   teamGroups.value = Object.freeze(
-    PersonnelLeaveForm.buildTeamGroups(list, teamOptions),
+    PersonnelLeaveForm.buildTeamGroups(scopedList, teamOptions),
   ) as TeamGroupItem[]
-  for (const person of list) {
+  for (const person of scopedList) {
     if (personVisible[person.id] === undefined) {
-      personVisible[person.id] = true
+      personVisible[person.id] = false
     }
   }
   personnelReady.value = true
@@ -306,6 +309,7 @@ const personnelReady = ref(false)
 const groupExpanded = reactive<Record<string, boolean>>({
   设计组: true,
   细化组: true,
+  开发组: true,
 })
 
 /** 各人员是否在日历中显示（组级开关会批量修改此表） */
@@ -329,6 +333,12 @@ const dtoLookup = ref(new Map<string, LeaveEntryDTO>())
 const hoveredMonth = ref<number | null>(null)
 /** 点击月份标题锁定筛选：只显示该月有休假的人员，跨年份保持 */
 const pinnedMonth = ref<number | null>(null)
+/** 导出名单用的目标月份（锁定月份时自动同步） */
+const exportMonth = ref(new Date().getMonth() + 1)
+
+watch(pinnedMonth, (month) => {
+  if (month !== null) exportMonth.value = month
+})
 
 function dtoToEntry(dto: LeaveEntryDTO) {
   return {
@@ -453,6 +463,17 @@ function hasLeaveInYear(personnelId: string) {
   return personnelIdsWithLeave.value.has(personnelId)
 }
 
+function isMemberHighlighted(personnelId: string) {
+  if (hoveredPersonnelId.value === personnelId) return true
+  if (hoveredMonth.value !== null && hoveredMonthPersonnelIds.value.has(personnelId)) {
+    return true
+  }
+  if (pinnedMonth.value !== null && pinnedMonthPersonnelIds.value?.has(personnelId)) {
+    return true
+  }
+  return false
+}
+
 /** 某月内有休假记录的人员 ID（用于月份悬停/锁定筛选） */
 function getMonthPersonnelIds(month: number): Set<string> {
   const mm = String(month).padStart(2, '0')
@@ -512,7 +533,11 @@ const visibleRows = computed(() => {
       return false
     }
     if (soloPersonnelId.value !== null) {
-      return row.personnelId === soloPersonnelId.value
+      return (
+        row.personnelId === soloPersonnelId.value ||
+        row.personnelId === hoveredPersonnelId.value ||
+        hoveredMonthPersonnelIds.value.has(row.personnelId)
+      )
     }
     return (
       effectiveVisibleIds.value.includes(row.personnelId) ||
@@ -639,10 +664,89 @@ function togglePinMonth(month: number) {
   pinnedMonth.value = pinnedMonth.value === month ? null : month
 }
 
-/** 按钮激活态：solo 时只看是否为目标人，不受月份锁定影响 */
+/** 自然月区间：本月 1 日～月末 */
+function getLeaveCalendarPeriod(y: number, month: number) {
+  const lastDayNum = new Date(y, month, 0).getDate()
+  const mm = String(month).padStart(2, '0')
+  return {
+    start: `${y}-${mm}-01`,
+    end: `${y}-${mm}-${String(lastDayNum).padStart(2, '0')}`,
+    label: `${month}.1～${month}.${lastDayNum}`,
+  }
+}
+
+/** 统计月区间：上月 21 日～本月 20 日（如 8 月 = 7.21～8.20） */
+function getLeaveStatPeriod(y: number, month: number) {
+  const prevMonth = month === 1 ? 12 : month - 1
+  const prevYear = month === 1 ? y - 1 : y
+  return {
+    start: `${prevYear}-${String(prevMonth).padStart(2, '0')}-21`,
+    end: `${y}-${String(month).padStart(2, '0')}-20`,
+    label: `${prevMonth}.21～${month}.20`,
+  }
+}
+
+type LeaveRosterPeriodMode = 'calendar' | 'stat'
+
+/** 生成某月休假人员名单文本（仅已保存记录，不含推算/已取消） */
+function buildMonthLeaveRosterText(month: number, mode: LeaveRosterPeriodMode): string {
+  const period =
+    mode === 'stat'
+      ? getLeaveStatPeriod(year.value, month)
+      : getLeaveCalendarPeriod(year.value, month)
+  const { start, end, label } = period
+  const personMap = new Map(personnelList.value.map((p) => [p.id, p]))
+  const lines: string[] = []
+
+  const entries = (calendarData.value?.actualEntries ?? [])
+    .filter(
+      (entry) =>
+        entry.status !== 'cancelled' &&
+        entry.startDate <= end &&
+        entry.endDate >= start,
+    )
+    .slice()
+    .sort((a, b) => {
+      const nameA = personMap.get(a.personnelId)?.name ?? ''
+      const nameB = personMap.get(b.personnelId)?.name ?? ''
+      if (nameA !== nameB) return nameA.localeCompare(nameB, 'zh-CN')
+      return a.startDate.localeCompare(b.startDate)
+    })
+
+  for (const entry of entries) {
+    const name = personMap.get(entry.personnelId)?.name
+    if (!name) continue
+    lines.push(`${name}：${entry.startDate}～${entry.endDate}`)
+  }
+
+  if (!lines.length) {
+    return `${year.value}年${month}月（${label}）无休假人员`
+  }
+  return [`${year.value}年${month}月休假人员（${label}）：`, ...lines].join('\n')
+}
+
+async function handleCopyMonthLeaveRoster(mode: LeaveRosterPeriodMode) {
+  const text = buildMonthLeaveRosterText(exportMonth.value, mode)
+  if (text.includes('无休假人员')) {
+    ElMessage.warning(text)
+    return
+  }
+  const ok = await copyTextToClipboard(text)
+  if (ok) {
+    const modeLabel = mode === 'stat' ? '21号起' : '1号起'
+    ElMessage.success(`已复制 ${exportMonth.value} 月休假名单（${modeLabel}）`)
+  } else {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+/** 按钮激活态：solo / 锁定月份时只看筛选范围内的人 */
 function isPersonShown(personnelId: string) {
   if (soloPersonnelId.value !== null) {
     return personnelId === soloPersonnelId.value
+  }
+  if (pinnedMonthPersonnelIds.value !== null) {
+    return pinnedMonthPersonnelIds.value.has(personnelId)
   }
   return Boolean(personVisible[personnelId])
 }
@@ -653,6 +757,9 @@ function isGroupFullyShown(team: string) {
   if (!group?.members.length) return false
   if (soloPersonnelId.value !== null) {
     return group.members.length === 1 && group.members[0].personnelId === soloPersonnelId.value
+  }
+  if (pinnedMonthPersonnelIds.value !== null) {
+    return group.members.some((m) => pinnedMonthPersonnelIds.value!.has(m.personnelId))
   }
   return group.members.every((m) => personVisible[m.personnelId])
 }
@@ -861,7 +968,7 @@ function getTeamMembers(team: string) {
 
 /** solo 模式下点击成员可切换目标人，点击当前目标人则退出 solo */
 function toggleGroupVisibility(team: string) {
-  if (soloPersonnelId.value !== null) return
+  if (soloPersonnelId.value !== null || pinnedMonth.value !== null) return
   const members = getTeamMembers(team)
   const allShown = members.every((person) => personVisible[person.id])
   for (const member of members) {
@@ -904,7 +1011,7 @@ async function initializePage() {
 
     if (mode === 'admin') {
       console.log('🟠 [initializePage] 进入管理员路径，加载全员数据...')
-      const list = await fetchPersonnelList()
+      const list = await fetchPersonnelList({ status: PersonnelForm.STATUS.ACTIVE })
       if (requestId !== initRequestId) return
       applyPersonnelList(list)
       console.log('🟠 [initializePage] fetchPersonnelList 返回', list.length, '人')
@@ -972,6 +1079,23 @@ onBeforeUnmount(() => {
         </el-button>
       </div>
 
+      <div class="export-roster">
+        <el-select v-model="exportMonth" size="small" class="export-month-select">
+          <el-option
+            v-for="m in 12"
+            :key="m"
+            :label="`${m}月`"
+            :value="m"
+          />
+        </el-select>
+        <el-button size="small" title="按本月1日～月末统计" @click="handleCopyMonthLeaveRoster('calendar')">
+          复制(1号)
+        </el-button>
+        <el-button size="small" title="按上月21日～本月20日统计" @click="handleCopyMonthLeaveRoster('stat')">
+          复制(21号)
+        </el-button>
+      </div>
+
       <div class="team-groups-panel">
         <div
           v-for="group in teamGroups"
@@ -1010,7 +1134,7 @@ onBeforeUnmount(() => {
               class="member-toggle"
               :class="{
                 'is-off': !isPersonShown(member.personnelId),
-                'is-hovered': hoveredPersonnelId === member.personnelId,
+                'is-hovered': isMemberHighlighted(member.personnelId),
                 'is-solo': soloPersonnelId === member.personnelId,
                 'is-no-leave': !hasLeaveInYear(member.personnelId),
               }"
@@ -1072,6 +1196,11 @@ onBeforeUnmount(() => {
             <el-icon><Setting /></el-icon>
             休假策略
           </el-button>
+
+          <div class="leave-hint">
+            <el-icon><InfoFilled /></el-icon>
+            点击日期可编辑休假；推算段需「修改并保存」后才会写入
+          </div>
         </div>
       </div>
 
@@ -1223,8 +1352,8 @@ onBeforeUnmount(() => {
 .leave-page {
   --layout-top-height: 48px;
   --layout-tabs-height: 40px;
-  margin: -20px -20px -10px;
-  height: calc(100vh - var(--layout-top-height) - var(--layout-tabs-height));
+  margin: -20px -15px -10px;
+  height: calc(100vh - var(--layout-top-height) - var(--layout-tabs-height) - 5px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1264,6 +1393,18 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   padding-top: 2px;
   min-width: 72px;
+}
+
+.export-roster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.export-month-select {
+  width: 76px;
 }
 
 /* 设计组 / 细化组各占一行，组内横向排列 */
@@ -1323,6 +1464,21 @@ onBeforeUnmount(() => {
 
 .member-create-btn {
   font-weight: 500;
+}
+
+.leave-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.leave-hint .el-icon {
+  font-size: 14px;
+  flex-shrink: 0;
 }
 
 .year-label {

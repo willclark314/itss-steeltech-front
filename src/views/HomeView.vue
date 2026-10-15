@@ -1,115 +1,85 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import {
+  APP_PAGES,
+  DEV_APP_PAGES,
+  type AppPageDefinition,
+} from '@/models/navigation/appNavigation'
 import { getUser, isAdminUser } from '@/utils/auth'
+import {
+  buildOrderedAccessiblePages,
+  getModuleOrder,
+  getNavigationOrderRef,
+  loadNavigationOrder,
+} from '@/utils/navigationOrder'
+import { filterAccessiblePages } from '@/utils/permission'
 
 const router = useRouter()
+const isDev = import.meta.env.DEV
+const currentUser = computed(() => getUser())
+const navigationOrder = getNavigationOrderRef()
 
-// ── 当前用户权限 ──
-const isAdminUserFlag = isAdminUser(getUser())
-
-interface FeatureLink {
-  path: string
-  title: string
-  description: string
-}
+const accessiblePages = computed<AppPageDefinition[]>(() => {
+  const pages = filterAccessiblePages(APP_PAGES, currentUser.value)
+  const devPages =
+    isDev && isAdminUser(currentUser.value) ? DEV_APP_PAGES : []
+  void navigationOrder.value
+  return buildOrderedAccessiblePages(pages, devPages)
+})
 
 interface SystemModule {
   name: string
   summary: string
-  links: FeatureLink[]
+  links: Array<{
+    path: string
+    title: string
+    description: string
+  }>
+}
+
+const MODULE_SUMMARY: Record<string, string> = {
+  门户: '系统入口与基础信息，便于快速了解平台概况。',
+  钢构技术系统: '支撑钢构技术日常协同，管理项目与工程联系单。',
+  生产计划系统: '生产计划相关功能入口，后续将逐步扩展业务页面。',
+  人员系统: '钢结构技术科人员信息与休假安排管理。',
+  系统设置: '系统级参数与全局配置，对所有用户生效。',
+  开发: '开发调试与界面预览页面。',
 }
 
 const systemModules = computed<SystemModule[]>(() => {
-  const modules: SystemModule[] = [
-    {
-      name: '门户',
-      summary: '系统入口与基础信息，便于快速了解平台概况。',
-      links: [
-        { path: '/home', title: '首页', description: '系统概览与功能导航' },
-        { path: '/portal/my', title: '我的', description: '查看分配给自己的项目及关联联系单' },
-        { path: '/portal/about', title: '关于', description: '了解系统概况与使用说明' },
-        { path: '/portal/guide', title: '说明', description: '年休与月休页面的操作说明与使用指南' },
-      ],
-    },
-    {
-      name: '业务系统',
-      summary: isAdminUserFlag
-        ? '支撑日常业务协同，管理项目与工程联系单。'
-        : '查询工程联系单与项目信息，按状态或人员分组查看。',
-      links: isAdminUserFlag
-        ? [
-            {
-              path: '/business/contact-browse',
-              title: '联系单',
-              description: '查询工程联系单，按状态或紧急程度分组查看',
-            },
-            {
-              path: '/business/contact',
-              title: '联系单管理',
-              description: '联系单录入、查询、附件管理与状态跟踪',
-            },
-            {
-              path: '/business/project-browse',
-              title: '项目',
-              description: '查询项目信息，按流程状态或分配人员分组查看',
-            },
-            { path: '/business/project', title: '项目管理', description: '项目信息维护、检索及与联系单关联查看' },
-            { path: '/business/schedule', title: '工作安排', description: '按年度计划开始与结束时间查看项目日历安排' },
-            {
-              path: '/business/detail-team-schedule',
-              title: '细化组排班',
-              description: '查看未完成细化项目，管理细化组人员项目分配',
-            },
-          ]
-        : [
-            {
-              path: '/business/contact-browse',
-              title: '联系单',
-              description: '查询工程联系单，按状态或紧急程度分组查看',
-            },
-            {
-              path: '/business/project-browse',
-              title: '项目',
-              description: '查询项目信息，按流程状态或分配人员分组查看',
-            },
-          ],
-    },
+  void navigationOrder.value
+  const moduleNames = [
+    ...getModuleOrder(),
+    ...(isDev && isAdminUser(currentUser.value) ? ['开发'] : []),
   ]
 
-  modules.push({
-    name: '人员系统',
-    summary: '钢结构技术科人员信息与休假安排管理。',
-    links: isAdminUserFlag
-      ? [
-          { path: '/personnel/person', title: '人员', description: '人员档案查询、详情编辑及按班组/国籍/宿舍分组' },
-          { path: '/personnel/role', title: '角色', description: '角色管理、关联人员与页面访问权限配置' },
-          { path: '/personnel/leave', title: '年休', description: '全年休假日历、班组筛选与休假记录查看' },
-          { path: '/personnel/monthly-rest', title: '月休', description: '每月周末休息排班，点击方格切换休息日' },
-        ]
-      : [
-          { path: '/personnel/leave', title: '年休', description: '全年休假日历、班组筛选与休假记录查看' },
-          { path: '/personnel/monthly-rest', title: '月休', description: '每月周末休息排班，点击方格切换休息日' },
-        ],
-  })
-
-  // 仅管理员可见：系统设置
-  if (isAdminUserFlag) {
-    modules.push({
-      name: '系统设置',
-      summary: '系统级参数与全局配置，对所有用户生效。',
-      links: [
-        { path: '/system/settings', title: '全局配置', description: '本地工作路径、IP 与盘符等系统级参数维护' },
-      ],
+  return moduleNames
+    .map((name) => {
+      const links = accessiblePages.value
+        .filter((page) => page.module === name)
+        .map((page) => ({
+          path: page.path,
+          title: page.pageName,
+          description: page.description ?? '',
+        }))
+      if (!links.length) return null
+      return {
+        name,
+        summary: MODULE_SUMMARY[name] ?? '',
+        links,
+      }
     })
-  }
-
-  return modules
+    .filter((module): module is SystemModule => module !== null)
 })
 
 function goTo(path: string) {
   void router.push(path)
 }
+
+onMounted(() => {
+  void loadNavigationOrder()
+})
 </script>
 
 <template>

@@ -7,6 +7,11 @@
   font-size: 13px;
 }
 
+.biz-data-table .project-no-text.is-urgent {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+
 .biz-data-table td.tag-column,
 .biz-data-table td.text-column,
 .biz-data-table td.project-no-column,
@@ -56,11 +61,21 @@
   cursor: default;
 }
 
+.biz-data-table .flow-status-tag-list {
+  flex-wrap: wrap;
+  align-content: center;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
 .biz-data-table .project-no-column .el-tooltip__trigger,
 .biz-data-table .contact-form-column .el-tooltip__trigger,
 .biz-data-table .contact-id-column .el-tooltip__trigger,
 .biz-data-table .personnel-column .el-tooltip__trigger,
-.biz-data-table .nature-column .el-tooltip__trigger {
+.biz-data-table .nature-column .el-tooltip__trigger,
+.biz-data-table .attachment-column .el-tooltip__trigger,
+.biz-data-table .attachment-column .el-popover__reference {
   display: inline-flex !important;
   align-items: center;
   width: 100%;
@@ -163,11 +178,11 @@
 }
 
 .biz-data-table .el-table__body .el-table__row.is-highlighted > td {
-  background-color: var(--el-color-primary-light-9) !important;
+  background-color: var(--el-color-primary-light-8) !important;
 }
 
 .biz-data-table .el-table__body .el-table__row.is-highlighted:hover > td {
-  background-color: var(--el-color-primary-light-8) !important;
+  background-color: var(--el-color-primary-light-7) !important;
 }
 
 .biz-table-load-hint {

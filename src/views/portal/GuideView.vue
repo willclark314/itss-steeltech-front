@@ -112,7 +112,7 @@
         <section class="guide-section">
           <h3 class="section-title">页面用途</h3>
           <p>
-            月休页面用于安排每人每月的<strong>周末休息日</strong>。每位员工在周六、周日中选择休息日期，同一周内只能选周六或周日其一。系统会提示各班组周末是否有人值班。
+            月休页面用于安排每人每月的休息日。中国籍员工以<strong>周六、周日</strong>为主（同一周内只能选其一），每月还可额外选择<strong>1 个非周末任意日</strong>；印尼籍员工可在当月任意日期中选择 1–4 天。系统会提示各班组周末是否有人值班。
           </p>
         </section>
 
@@ -120,9 +120,9 @@
           <h3 class="section-title">基本操作</h3>
           <ul class="guide-list">
             <li>使用顶部 <strong>← →</strong> 按钮切换查看月份。</li>
-            <li>在表格中<strong>点击周末方格</strong>（周六或周日列）切换是否为休息日，仅周末日期可选。</li>
-            <li>同一周内若已选周六，再选周日会自动取消周六（反之亦然）。</li>
-            <li>首次进入某月、尚无保存记录时，系统默认为<strong>全部周日休息</strong>。</li>
+            <li>在表格中<strong>点击日期方格</strong>切换是否为休息日。</li>
+            <li>中国籍：周末同一周内若已选周六，再选周日会自动取消周六（反之亦然）；非周末最多选 1 天，再选会替换原先那一天。</li>
+            <li>首次进入某月、尚无保存记录时，中国籍默认为<strong>全部周日休息</strong>。</li>
             <li>表格右侧「休息天数」列显示当月已选休息日的总数。</li>
           </ul>
         </section>
@@ -145,7 +145,7 @@
         <section class="guide-section">
           <h3 class="section-title">普通员工操作</h3>
           <ul class="guide-list">
-            <li>只能编辑<strong>本人</strong>所在行的周末方格。</li>
+            <li>只能编辑<strong>本人</strong>所在行的日期方格。</li>
             <li>调整完毕后，点击本人行末的<strong>保存</strong>按钮提交当月月休计划。</li>
             <li>当月计划被管理员定稿后，本人行变为只读，无法再修改。</li>
           </ul>
@@ -205,7 +205,7 @@ const guideSystems: GuideSystem[] = [
         key: 'personnel-monthly-rest',
         title: '月休',
         path: '/personnel/monthly-rest',
-        summary: '安排每月周末休息与值班，点击方格切换休息日。',
+        summary: '安排每月休息与值班；中国籍以周末为主，另可任选 1 个非周末日。',
       },
     ],
   },

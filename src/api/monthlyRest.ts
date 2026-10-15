@@ -73,11 +73,26 @@ export function deleteMonthlyRest(id: string) {
   })
 }
 
-/** 导出月休计划 Excel（仅管理员可用），触发浏览器下载 */
-export async function downloadMonthlyRestExcel(year: number, month: number): Promise<void> {
+/** 导出月休计划 Excel（仅管理员可用），触发浏览器下载；可限定为当前显示的人员及国籍 */
+export async function downloadMonthlyRestExcel(
+  year: number,
+  month: number,
+  personnelIds?: string[],
+  nationality?: '中国' | '印度尼西亚',
+): Promise<void> {
   const token = localStorage.getItem('itss_token')
+  const query = new URLSearchParams({
+    year: String(year),
+    month: String(month),
+  })
+  if (personnelIds?.length) {
+    query.set('personnelIds', personnelIds.join(','))
+  }
+  if (nationality) {
+    query.set('nationality', nationality)
+  }
   const response = await fetch(
-    `${BASE_URL}/monthly-rest/export?year=${year}&month=${month}`,
+    `${BASE_URL}/monthly-rest/export?${query.toString()}`,
     {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     },

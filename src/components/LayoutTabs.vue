@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router'
 import type { TabsPaneContext } from 'element-plus'
 import { getUser, isAdminUser } from '@/utils/auth'
+import { canAccessPath } from '@/utils/permission'
 
 interface TabItem {
   path: string
@@ -30,7 +31,10 @@ function isValidTabPath(path: string): boolean {
   if (resolved.matched.length === 0 || !resolved.meta?.title || resolved.meta?.public) {
     return false
   }
-  if (resolved.meta.adminOnly && !isAdminUser(getUser())) {
+  if (resolved.meta.devOnly && !isAdminUser(getUser())) {
+    return false
+  }
+  if (!canAccessPath(path)) {
     return false
   }
   return true

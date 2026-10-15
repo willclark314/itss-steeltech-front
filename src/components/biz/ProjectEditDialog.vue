@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage, type FormInstance } from 'element-plus'
-import { updateProject } from '@/api/projects'
+import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
+import { copyProject, fetchProjectList, splitProject, updateProject } from '@/api/projects'
 import { fetchPersonnelList } from '@/api/personnel'
 import { fetchSystemConfig } from '@/api/system'
+import PersonnelAssignSelect from '@/components/biz/PersonnelAssignSelect.vue'
 import ProjectDetailWorkflowPanel from '@/components/biz/ProjectDetailWorkflowPanel.vue'
+import ProjectContactFormSelect from '@/components/biz/ProjectContactFormSelect.vue'
 import TagSelect from '@/components/biz/TagSelect.vue'
 import { DetailWorkflowForm, ProjectForm } from '@/models/biz/project'
+import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
 import { BusinessSystemConfig } from '@/models/biz'
 import type { LocalWorkPathConfig } from '@/models/biz'
 import type { PersonnelRecord } from '@/models/personnel'
-import type { ProjectAssignee, ProjectRecord } from '@/models/biz/project'
+import type { ProjectAssignee, ProjectNatureCode, ProjectRecord } from '@/models/biz/project'
+import type { SplitProjectResult } from '@/api/projects'
 
 const visible = defineModel<boolean>('visible', { default: false })
 
@@ -19,15 +23,23 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  saved: [record: ProjectRecord]
+  saved: [record: ProjectRecord, previousProjectNo?: string]
+  split: [result: SplitProjectResult]
 }>()
 
+type DialogMode = 'edit' | 'copy'
+
 const submitting = ref(false)
+const splitting = ref(false)
+const dialogMode = ref<DialogMode>('edit')
+const copySourceNo = ref<string | null>(null)
 const formRef = ref<FormInstance>()
 const form = reactive(ProjectForm.createEmptyForm())
+const naturesSnapshot = ref<ProjectNatureCode[]>([])
 const formRules = ProjectForm.FORM_RULES
 const statusFormOptions = ProjectForm.STATUS_FORM_OPTIONS
 const natureOptions = ProjectForm.NATURE_OPTIONS
+const structureTypeOptions = ProjectForm.STRUCTURE_TYPE_OPTIONS
 const personnelOptions = ref<PersonnelRecord[]>([])
 const editingAssignedPersonnel = ref<ProjectAssignee[]>([])
 const localWorkPathConfig = ref<LocalWorkPathConfig>({
@@ -41,11 +53,13 @@ const detailWorkPathPreview = computed(() =>
   ProjectForm.buildLocalWorkPathFull(form.detailWorkPath, localWorkPathConfig.value),
 )
 
-const dialogTitle = computed(() =>
-  props.record
-    ? `编辑项目 · ${ProjectForm.getDisplayProjectNo(props.record)}`
-    : '编辑项目',
-)
+const dialogTitle = computed(() => {
+  if (dialogMode.value === 'copy') return '复制为新项目'
+  if (props.record) {
+    return `编辑项目 · ${ProjectForm.getDisplayProjectNo(props.record)}`
+  }
+  return '编辑项目'
+})
 
 const currentRecord = ref<ProjectRecord | null>(null)
 const usesDetailWorkflow = computed(() =>
@@ -54,53 +68,62 @@ const usesDetailWorkflow = computed(() =>
     : false,
 )
 
-type PersonnelSelectOption = {
-  id: string
-  name: string
-  team: string
+function syncNaturesSnapshot() {
+  naturesSnapshot.value = [...form.natures]
 }
 
-const personnelSelectOptions = computed((): PersonnelSelectOption[] => {
-  const optionMap = new Map<string, PersonnelSelectOption>()
+function isSameNatures(left: ProjectNatureCode[], right: ProjectNatureCode[]) {
+  if (left.length !== right.length) return false
+  return left.every((item) => right.includes(item))
+}
 
-  for (const person of personnelOptions.value) {
-    optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-  }
+function syncWorkPathsForNatureChange() {
+  const nextNatures = [...form.natures]
+  if (isSameNatures(nextNatures, naturesSnapshot.value)) return
 
-  for (const person of editingAssignedPersonnel.value) {
-    if (!optionMap.has(person.id)) {
-      optionMap.set(person.id, { id: person.id, name: person.name, team: person.team })
-    }
-  }
-
-  return [...optionMap.values()].sort((a, b) => {
-    const teamCompare = a.team.localeCompare(b.team, 'zh-CN')
-    return teamCompare !== 0 ? teamCompare : a.name.localeCompare(b.name, 'zh-CN')
-  })
-})
+  const synced = ProjectWorkPath.syncWorkPathsForNatures(
+    {
+      ...form,
+      natures: nextNatures,
+      isJiagongdan: currentRecord.value?.isJiagongdan ?? false,
+      receivedDate: currentRecord.value?.receivedDate ?? form.plannedStartDate ?? '',
+    },
+    naturesSnapshot.value,
+    localWorkPathConfig.value.pathPatterns,
+  )
+  form.designWorkPath = synced.designWorkPath
+  form.detailWorkPath = synced.detailWorkPath
+  form.localWorkPath = synced.localWorkPath
+  naturesSnapshot.value = nextNatures
+}
 
 async function loadOptions() {
   try {
-    const [personnel, systemConfig] = await Promise.all([
-      fetchPersonnelList(),
-      fetchSystemConfig(),
-    ])
-    personnelOptions.value = personnel
-    localWorkPathConfig.value = { ...systemConfig.localWorkPath }
+    personnelOptions.value = await fetchPersonnelList({ status: 'active' })
   } catch {
     personnelOptions.value = []
+  }
+  try {
+    const systemConfig = await fetchSystemConfig()
+    localWorkPathConfig.value = { ...systemConfig.localWorkPath }
+  } catch {
+    // 无系统配置权限时保留默认路径预览，不影响分配人员
   }
 }
 
 function resetForm(record: ProjectRecord | null) {
+  dialogMode.value = 'edit'
+  copySourceNo.value = null
   currentRecord.value = record ? ProjectForm.cloneRecord(record) : null
   if (!record) {
     Object.assign(form, ProjectForm.createEmptyForm())
     editingAssignedPersonnel.value = []
+    naturesSnapshot.value = []
     return
   }
   editingAssignedPersonnel.value = record.assignedPersonnel.map((person) => ({ ...person }))
   Object.assign(form, ProjectForm.createFormFromRecord(record))
+  syncNaturesSnapshot()
 }
 
 watch(
@@ -121,12 +144,25 @@ watch(
     if (!ProjectForm.hasDetailGroupNature({ natures })) {
       form.detailCompleted = false
     }
+    syncWorkPathsForNatureChange()
+  },
+)
+
+watch(
+  () => form.drawingIssueEnabled,
+  (enabled) => {
+    if (!enabled) {
+      form.drawingIssueYearMonth = ''
+    }
   },
 )
 
 function handleClosed() {
+  dialogMode.value = 'edit'
+  copySourceNo.value = null
   currentRecord.value = null
   Object.assign(form, ProjectForm.createEmptyForm())
+  naturesSnapshot.value = []
   editingAssignedPersonnel.value = []
   formRef.value?.clearValidate()
 }
@@ -138,6 +174,51 @@ function handleWorkflowUpdated(record: ProjectRecord) {
   emit('saved', record)
 }
 
+async function openCopyMode() {
+  if (!props.record) return
+  dialogMode.value = 'copy'
+  copySourceNo.value = props.record.projectNo
+  try {
+    const result = await fetchProjectList({ all: true })
+    Object.assign(
+      form,
+      ProjectForm.createFormForCopy(
+        props.record,
+        result.list.map((item) => item.projectNo),
+      ),
+    )
+    syncNaturesSnapshot()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载项目列表失败')
+  }
+}
+
+async function handleSplit() {
+  if (!props.record) return
+
+  try {
+    await ElMessageBox.confirm(
+      '将把当前项目拆分为两个独立项目：原项目保留联系单，新项目不复制联系单。若项目号尚无 -1 后缀，将自动改名为「根号-1」并创建「根号-2」。是否继续？',
+      '拆分项目',
+      { type: 'warning', confirmButtonText: '拆分', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  splitting.value = true
+  try {
+    const result = await splitProject(props.record.projectNo)
+    emit('split', result)
+    visible.value = false
+    ElMessage.success(`已拆分：${result.original.projectNo}、${result.clone.projectNo}`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '拆分项目失败')
+  } finally {
+    splitting.value = false
+  }
+}
+
 async function handleSubmit() {
   if (!props.record) return
 
@@ -147,7 +228,37 @@ async function handleSubmit() {
   submitting.value = true
   try {
     const primaryWorkPath = form.detailWorkPath || form.designWorkPath
+    if (dialogMode.value === 'copy' && copySourceNo.value) {
+      const created = await copyProject(copySourceNo.value, {
+        projectNo: form.projectNo.trim(),
+        name: form.name.trim(),
+        status: form.status,
+        designCompleted: form.designCompleted,
+        detailCompleted: form.detailCompleted,
+        natures: [...form.natures],
+        tagIds: [...form.tagIds],
+        assignedPersonnelIds: [...form.assignedPersonnelIds],
+        plannedStartDate: form.plannedStartDate,
+        plannedEndDate: form.plannedEndDate,
+        actualStartDate: form.actualStartDate,
+        actualEndDate: form.actualEndDate,
+        designWorkPath: form.designWorkPath,
+        detailWorkPath: form.detailWorkPath,
+        localWorkPath: primaryWorkPath,
+        drawingIssueEnabled: form.drawingIssueEnabled,
+        drawingIssueYearMonth: form.drawingIssueYearMonth,
+        structureType: form.structureType || '',
+        estimatedWeightTons: form.estimatedWeightTons,
+        clearActualDates: true,
+      })
+      emit('saved', created)
+      visible.value = false
+      ElMessage.success(`已复制为新项目：${created.projectNo}`)
+      return
+    }
+
     const updated = await updateProject(props.record.projectNo, {
+      projectNo: form.projectNo.trim(),
       name: form.name.trim(),
       status: form.status,
       designCompleted: form.designCompleted,
@@ -155,6 +266,7 @@ async function handleSubmit() {
       natures: [...form.natures],
       tagIds: [...form.tagIds],
       assignedPersonnelIds: [...form.assignedPersonnelIds],
+      contactFormIds: [...form.contactFormIds],
       plannedStartDate: form.plannedStartDate,
       plannedEndDate: form.plannedEndDate,
       actualStartDate: form.actualStartDate,
@@ -162,12 +274,22 @@ async function handleSubmit() {
       designWorkPath: form.designWorkPath,
       detailWorkPath: form.detailWorkPath,
       localWorkPath: primaryWorkPath,
+      drawingIssueEnabled: form.drawingIssueEnabled,
+      drawingIssueYearMonth: form.drawingIssueYearMonth,
+      structureType: form.structureType || '',
+      estimatedWeightTons: form.estimatedWeightTons,
     })
-    emit('saved', updated)
+    emit('saved', updated, props.record.projectNo)
     visible.value = false
     ElMessage.success('项目已更新')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '更新项目失败')
+    ElMessage.error(
+      error instanceof Error
+        ? error.message
+        : dialogMode.value === 'copy'
+          ? '复制项目失败'
+          : '更新项目失败',
+    )
   } finally {
     submitting.value = false
   }
@@ -184,28 +306,31 @@ async function handleSubmit() {
   >
     <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
       <el-form-item label="项目号" prop="projectNo">
-        <el-input
-          :model-value="props.record ? ProjectForm.getDisplayProjectNo(props.record) : form.projectNo"
-          disabled
-        />
+        <el-input v-model="form.projectNo" placeholder="请输入项目号" />
       </el-form-item>
       <el-form-item label="项目名称" prop="name">
         <el-input v-model="form.name" placeholder="请输入项目名称" />
+      </el-form-item>
+      <el-form-item v-if="dialogMode === 'edit'" label="关联联系单">
+        <ProjectContactFormSelect
+          v-model="form.contactFormIds"
+          :display-project-no="ProjectForm.getDisplayProjectNo(currentRecord || { projectNo: form.projectNo, baseProjectNo: form.projectNo })"
+        />
       </el-form-item>
       <el-form-item label="本地路径">
         <div class="local-path-group">
           <template v-if="form.natures.includes(ProjectForm.NATURE.DESIGN)">
             <div class="local-path-item">
-              <div class="local-path-item__label">设计路径</div>
+              <div class="local-path-item__label">设计归档路径</div>
               <el-input
                 v-model="form.designWorkPath"
                 type="textarea"
                 :rows="2"
-                placeholder="设计相对路径"
+                placeholder="设计归档相对路径"
                 class="local-path-input"
               />
               <div class="form-hint">
-                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                全局配置：{{ localWorkPathConfig.ip }}
                 <template v-if="designWorkPathPreview">
                   · 完整路径 {{ designWorkPathPreview }}
                 </template>
@@ -214,16 +339,16 @@ async function handleSubmit() {
           </template>
           <template v-if="ProjectForm.hasDetailGroupNature(form)">
             <div class="local-path-item">
-              <div class="local-path-item__label">细化路径</div>
+              <div class="local-path-item__label">细化归档路径</div>
               <el-input
                 v-model="form.detailWorkPath"
                 type="textarea"
                 :rows="2"
-                placeholder="细化相对路径"
+                placeholder="细化归档相对路径"
                 class="local-path-input"
               />
               <div class="form-hint">
-                全局配置：{{ localWorkPathConfig.ip }} · {{ localWorkPathConfig.drive }} 盘
+                全局配置：{{ localWorkPathConfig.ip }}
                 <template v-if="detailWorkPathPreview">
                   · 完整路径 {{ detailWorkPathPreview }}
                 </template>
@@ -231,7 +356,7 @@ async function handleSubmit() {
             </div>
           </template>
           <div v-if="!form.natures.length" class="form-hint">
-            请先选择项目性质，再填写对应的设计路径或细化路径。
+            请先选择项目性质，再填写对应的设计归档路径或细化归档路径。
           </div>
         </div>
       </el-form-item>
@@ -250,22 +375,12 @@ async function handleSubmit() {
         <TagSelect v-model="form.tagIds" />
       </el-form-item>
       <el-form-item label="分配人员">
-        <el-select
+        <PersonnelAssignSelect
           v-model="form.assignedPersonnelIds"
-          multiple
-          filterable
-          collapse-tags
-          collapse-tags-tooltip
+          :personnel-options="personnelOptions"
+          :extra-assignees="editingAssignedPersonnel"
           placeholder="从人员系统选择分配人员"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="person in personnelSelectOptions"
-            :key="person.id"
-            :label="`${person.name} · ${person.team}`"
-            :value="person.id"
-          />
-        </el-select>
+        />
       </el-form-item>
       <el-form-item label="流程状态">
         <el-radio-group v-model="form.status">
@@ -292,11 +407,51 @@ async function handleSubmit() {
           </el-checkbox>
         </div>
       </el-form-item>
-      <el-form-item v-if="currentRecord && usesDetailWorkflow" label="细化流程">
+      <el-form-item v-if="dialogMode === 'edit' && currentRecord && usesDetailWorkflow" label="细化流程">
         <ProjectDetailWorkflowPanel
           :record="currentRecord"
-          :preview-natures="form.natures"
           @updated="handleWorkflowUpdated"
+        />
+      </el-form-item>
+      <el-form-item label="发图计划">
+        <div class="drawing-issue-fields">
+          <el-checkbox v-model="form.drawingIssueEnabled">
+            是否发图
+          </el-checkbox>
+          <el-date-picker
+            v-model="form.drawingIssueYearMonth"
+            type="month"
+            placeholder="选择发图年月"
+            value-format="YYYY-MM"
+            format="YYYY年M月"
+            :disabled="!form.drawingIssueEnabled"
+            style="width: 180px"
+          />
+        </div>
+      </el-form-item>
+      <el-form-item label="结构形式">
+        <el-select
+          v-model="form.structureType"
+          clearable
+          placeholder="选择结构形式"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="item in structureTypeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="预估重量">
+        <el-input-number
+          v-model="form.estimatedWeightTons"
+          :min="0"
+          :precision="3"
+          :controls="false"
+          placeholder="吨"
+          style="width: 100%"
         />
       </el-form-item>
       <el-form-item label="计划开始">
@@ -338,8 +493,18 @@ async function handleSubmit() {
     </el-form>
 
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
+      <div class="project-dialog-footer">
+        <div v-if="dialogMode === 'edit' && record" class="project-dialog-footer__left">
+          <el-button @click="openCopyMode">复制为新项目</el-button>
+          <el-button :loading="splitting" @click="handleSplit">拆分项目</el-button>
+        </div>
+        <div class="project-dialog-footer__right">
+          <el-button @click="visible = false">取消</el-button>
+          <el-button type="primary" :loading="submitting" @click="handleSubmit">
+            {{ dialogMode === 'edit' ? '保存' : '复制' }}
+          </el-button>
+        </div>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -380,5 +545,27 @@ async function handleSubmit() {
   display: flex;
   flex-wrap: wrap;
   gap: 12px 20px;
+}
+
+.drawing-issue-fields {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.project-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.project-dialog-footer__left,
+.project-dialog-footer__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

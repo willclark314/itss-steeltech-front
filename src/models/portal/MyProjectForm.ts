@@ -9,10 +9,17 @@ import type {
 
 export const MY_PROJECT_DESIGN_TEAM = '设计组'
 export const MY_PROJECT_DETAIL_TEAM = '细化组'
+export const MY_PROJECT_DRAWING_OPERATOR_ROLE = 'drawing-operator'
+export const MY_PROJECT_PLATE_LAYOUT_OPERATOR_ROLE = 'plate-layout-operator'
 
-export type MyProjectFlowSegmentKind = 'process' | 'design' | 'detail'
+export type MyProjectDrawingTimeField = 'drawingStartedAt' | 'drawingCompletedAt'
+export type MyProjectPlateLayoutTimeField = 'plateLayoutStartedAt' | 'plateLayoutCompletedAt'
+export type MyProjectDesignTimeField = 'designStartedAt' | 'designCompletedAt'
+export type MyProjectDateColumnMode = 'actual' | 'design' | 'drawing' | 'plate_layout'
 
-export type MyProjectFlowFilterKind = 'process' | 'design' | 'detail' | 'detailMain'
+export type MyProjectFlowSegmentKind = 'process' | 'design' | 'detail' | 'tile' | 'floorDeck'
+
+export type MyProjectFlowFilterKind = 'process' | 'design' | 'detail' | 'detailMain' | 'tile' | 'floorDeck'
 
 export interface MyProjectFlowFilterGroup {
   key: string
@@ -29,16 +36,47 @@ export interface MyProjectFlowSegment {
 }
 
 export class MyProjectForm {
-  static canEditDesignProgress(personnelTeam: string, record: Pick<ProjectRecord, 'natures'>) {
+  static isDrawingOperator(roleCodes: readonly string[]) {
+    return roleCodes.includes(MY_PROJECT_DRAWING_OPERATOR_ROLE)
+  }
+
+  static isPlateLayoutOperator(roleCodes: readonly string[]) {
+    return roleCodes.includes(MY_PROJECT_PLATE_LAYOUT_OPERATOR_ROLE)
+  }
+
+  static isDesignTeam(personnelTeam = '') {
+    return personnelTeam === MY_PROJECT_DESIGN_TEAM
+  }
+
+  static getDateColumnMode(
+    roleCodes: readonly string[],
+    personnelTeam = '',
+  ): MyProjectDateColumnMode {
+    if (MyProjectForm.isDrawingOperator(roleCodes)) return 'drawing'
+    if (MyProjectForm.isPlateLayoutOperator(roleCodes)) return 'plate_layout'
+    if (personnelTeam === MY_PROJECT_DESIGN_TEAM) return 'design'
+    return 'actual'
+  }
+
+  static canEditDesignProgress(
+    personnelTeam: string,
+    record: Pick<ProjectRecord, 'natures' | 'status'>,
+  ) {
     return (
+      ProjectForm.canEditNatureProgressByStatus(record.status) &&
       personnelTeam === MY_PROJECT_DESIGN_TEAM &&
       ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.DESIGN)
     )
   }
 
-  static canEditDetailProgress(personnelTeam: string, record: Pick<ProjectRecord, 'natures'>) {
+  static canEditDetailProgress(
+    personnelTeam: string,
+    record: Pick<ProjectRecord, 'natures' | 'status'>,
+  ) {
     return (
-      personnelTeam === MY_PROJECT_DETAIL_TEAM && ProjectForm.hasDetailGroupNature(record)
+      ProjectForm.canEditNatureProgressByStatus(record.status) &&
+      personnelTeam === MY_PROJECT_DETAIL_TEAM &&
+      ProjectForm.hasDetailGroupNature(record)
     )
   }
 
@@ -80,6 +118,7 @@ export class MyProjectForm {
         editable: MyProjectForm.canEditDetailProgress(personnelTeam, record),
         usesDetailWorkflow: DetailWorkflowForm.needsDetailWorkflow(record.natures),
       })
+      MyProjectForm._appendTileFloorDeckSegments(record, segments)
       return segments
     }
 
@@ -93,6 +132,7 @@ export class MyProjectForm {
         editable: MyProjectForm.canEditDetailProgress(personnelTeam, record),
         usesDetailWorkflow: true,
       })
+      MyProjectForm._appendTileFloorDeckSegments(record, segments)
       return segments
     }
 
@@ -112,6 +152,7 @@ export class MyProjectForm {
       })
     }
 
+    MyProjectForm._appendTileFloorDeckSegments(record, segments)
     return segments
   }
 
@@ -143,15 +184,20 @@ export class MyProjectForm {
       segments.push({
         kind: 'design',
         ...ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DESIGN),
-        editable: ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.DESIGN),
+        editable:
+          ProjectForm.canEditNatureProgressByStatus(record.status) &&
+          ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.DESIGN),
         usesDetailWorkflow: false,
       })
       segments.push({
         kind: 'detail',
         ...DetailWorkflowForm.getMainPhaseMeta(record),
-        editable: ProjectForm.hasDetailGroupNature(record),
+        editable:
+          ProjectForm.canEditNatureProgressByStatus(record.status) &&
+          ProjectForm.hasDetailGroupNature(record),
         usesDetailWorkflow: DetailWorkflowForm.needsDetailWorkflow(record.natures),
       })
+      MyProjectForm._appendTileFloorDeckSegments(record, segments)
       return segments
     }
 
@@ -162,9 +208,12 @@ export class MyProjectForm {
       segments.push({
         kind: 'detail',
         ...DetailWorkflowForm.getMainPhaseMeta(record),
-        editable: ProjectForm.hasDetailGroupNature(record),
+        editable:
+          ProjectForm.canEditNatureProgressByStatus(record.status) &&
+          ProjectForm.hasDetailGroupNature(record),
         usesDetailWorkflow: true,
       })
+      MyProjectForm._appendTileFloorDeckSegments(record, segments)
       return segments
     }
 
@@ -172,19 +221,52 @@ export class MyProjectForm {
       segments.push({
         kind: 'design',
         ...ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DESIGN),
-        editable: true,
+        editable: ProjectForm.canEditNatureProgressByStatus(record.status),
         usesDetailWorkflow: false,
       })
     } else if (ProjectForm.hasDetailGroupNature(record)) {
       segments.push({
         kind: 'detail',
         ...ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DETAIL),
-        editable: true,
+        editable: ProjectForm.canEditNatureProgressByStatus(record.status),
         usesDetailWorkflow: false,
       })
     }
 
+    MyProjectForm._appendTileFloorDeckSegments(record, segments)
     return segments
+  }
+
+  private static _appendTileFloorDeckSegments(
+    record: Pick<
+      ProjectRecord,
+      | 'status'
+      | 'natures'
+      | 'designCompleted'
+      | 'detailCompleted'
+      | 'assignedPersonnel'
+      | 'designWorkPath'
+      | 'detailWorkPath'
+    >,
+    segments: MyProjectFlowSegment[],
+  ) {
+    const canEdit = ProjectForm.canEditNatureProgressByStatus(record.status)
+    if (ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.TILE_LAYOUT)) {
+      segments.push({
+        kind: 'tile',
+        ...ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.TILE_LAYOUT),
+        editable: canEdit,
+        usesDetailWorkflow: false,
+      })
+    }
+    if (ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)) {
+      segments.push({
+        kind: 'floorDeck',
+        ...ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT),
+        editable: canEdit,
+        usesDetailWorkflow: false,
+      })
+    }
   }
 
   static getProcessStatusOptions() {
@@ -243,7 +325,7 @@ export class MyProjectForm {
     const kind = filterValue.slice(0, separatorIndex) as MyProjectFlowFilterKind
     const value = filterValue.slice(separatorIndex + 1)
     if (!value) return null
-    if (kind !== 'process' && kind !== 'design' && kind !== 'detail' && kind !== 'detailMain') {
+    if (kind !== 'process' && kind !== 'design' && kind !== 'detail' && kind !== 'detailMain' && kind !== 'tile' && kind !== 'floorDeck') {
       return null
     }
     return { kind, value }
@@ -302,6 +384,25 @@ export class MyProjectForm {
       })
     }
 
+    // Tile & floor deck progress groups always shown (no team dependency)
+    const phases: NatureProgressPhase[] = ['not_started', 'in_progress', 'completed']
+    groups.push({
+      key: 'tile',
+      label: '排瓦进度',
+      options: phases.map((phase) => ({
+        value: MyProjectForm.encodeFlowFilter('tile', phase),
+        label: ProjectForm.NATURE_PROGRESS_LABELS.tile_layout[phase],
+      })),
+    })
+    groups.push({
+      key: 'floorDeck',
+      label: '排楼板进度',
+      options: phases.map((phase) => ({
+        value: MyProjectForm.encodeFlowFilter('floorDeck', phase),
+        label: ProjectForm.NATURE_PROGRESS_LABELS.floor_deck_layout[phase],
+      })),
+    })
+
     return groups
   }
 
@@ -340,8 +441,20 @@ export class MyProjectForm {
       ) {
         return false
       }
-      const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(record.natures)
+      const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(record.detailWorkflow)
       const phase = DetailWorkflowForm.deriveMainPhase(record.detailWorkflow, hasPlateLayout)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'tile') {
+      if (!ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.TILE_LAYOUT)) return false
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.TILE_LAYOUT)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'floorDeck') {
+      if (!ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)) return false
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)
       return phase === parsed.value
     }
 

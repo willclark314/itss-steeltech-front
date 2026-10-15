@@ -33,6 +33,7 @@ const restMap = reactive<Record<string, string[]>>({})
 const savedMap = reactive<Record<string, string[]>>({})
 
 const teamOptions = PersonnelForm.TEAM_OPTIONS
+const NATIONALITY = PersonnelForm.NATIONALITY
 
 // ── 当前用户权限 ──
 const currentUser = getUser()
@@ -122,6 +123,37 @@ const activePersonnel = computed(() =>
   personnelList.value.filter((p) => p.status === 'active'),
 )
 
+/** 人员 ID → 国籍 */
+const nationalityMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const person of activePersonnel.value) {
+    map.set(person.id, person.nationality)
+  }
+  return map
+})
+
+function isIndonesianPersonnel(personnelId: string): boolean {
+  return MonthlyRestForm.isIndonesianNationality(nationalityMap.value.get(personnelId))
+}
+
+/** 判断某日期对该人员是否可点击选择（中国籍/印尼籍当月任意日均可点） */
+function isDaySelectable(_personnelId: string, _weekday: string): boolean {
+  return true
+}
+
+/** 某人员已选中的非周末休息日 */
+function getChineseFlexWeekdays(personnelId: string): string[] {
+  return (restMap[personnelId] ?? []).filter((dateStr) => {
+    const weekday = allDays.value.find((d) => d.date === dateStr)?.weekday ?? ''
+    return !MonthlyRestForm.isWeekendWeekdayLabel(weekday)
+  })
+}
+
+/** 按分组导出 Excel 时的文件名后缀 */
+function getExportNationalityLabel(nationality: '中国' | '印度尼西亚'): string {
+  return nationality === NATIONALITY.INDONESIA ? '印尼籍' : '中国籍'
+}
+
 /** 按团队分组后的表格行 */
 const tableRows = computed(() => {
   const visibleTeams = new Set(
@@ -199,7 +231,6 @@ function getSiblingWeekend(dateStr: string): string | null {
 
 /** 切换休息日 */
 function toggleRestDay(personnelId: string, dateStr: string) {
-  if (!MonthlyRestForm.isWeekend(dateStr)) return
   if (!canEditRow(personnelId)) return
 
   if (!restMap[personnelId]) {
@@ -211,19 +242,52 @@ function toggleRestDay(personnelId: string, dateStr: string) {
   if (idx >= 0) {
     arr.splice(idx, 1)
   } else {
-    // 同一周内只能选周六或周日其一，先移除同周另一个周末日
-    const sibling = getSiblingWeekend(dateStr)
-    if (sibling) {
-      const siblingIdx = arr.indexOf(sibling)
-      if (siblingIdx >= 0) {
-        arr.splice(siblingIdx, 1)
+    if (isIndonesianPersonnel(personnelId)) {
+      if (arr.length >= MonthlyRestForm.INDONESIAN_REST_DAYS_MAX) {
+        ElMessage.warning(
+          `印尼籍员工每月最多选择 ${MonthlyRestForm.INDONESIAN_REST_DAYS_MAX} 天休息`,
+        )
+        return
       }
+      arr.push(dateStr)
+      arr.sort()
+    } else {
+      const weekday = allDays.value.find((d) => d.date === dateStr)?.weekday ?? ''
+      if (MonthlyRestForm.isWeekendWeekdayLabel(weekday)) {
+        // 中国籍周末：同一周内只能选周六或周日其一
+        const sibling = getSiblingWeekend(dateStr)
+        if (sibling) {
+          const siblingIdx = arr.indexOf(sibling)
+          if (siblingIdx >= 0) {
+            arr.splice(siblingIdx, 1)
+          }
+        }
+      } else {
+        // 中国籍非周末：每月最多 1 天，再选则替换旧的
+        const existingFlex = getChineseFlexWeekdays(personnelId)
+        for (const old of existingFlex) {
+          const oldIdx = arr.indexOf(old)
+          if (oldIdx >= 0) arr.splice(oldIdx, 1)
+        }
+      }
+      arr.push(dateStr)
+      arr.sort()
     }
-    arr.push(dateStr)
-    arr.sort()
   }
 
   dirty.value = true
+}
+
+function validateIndonesianRestDays(personnelId: string): string | null {
+  if (!isIndonesianPersonnel(personnelId)) return null
+  const count = (restMap[personnelId] ?? []).length
+  if (
+    count < MonthlyRestForm.INDONESIAN_REST_DAYS_MIN
+    || count > MonthlyRestForm.INDONESIAN_REST_DAYS_MAX
+  ) {
+    return `印尼籍员工每月需选择 ${MonthlyRestForm.INDONESIAN_REST_DAYS_MIN}-${MonthlyRestForm.INDONESIAN_REST_DAYS_MAX} 天休息`
+  }
+  return null
 }
 
 /** 获取当前月份所有周日 */
@@ -278,11 +342,11 @@ function initRestMap(records: MonthlyRestRecord[]) {
     savedMap[record.personnelId] = [...record.restDays]
   }
 
-  // 无记录的在职人员：默认全部周日休息（只写 restMap，不写 savedMap）
+  // 无记录的在职人员：中国籍默认全部周日休息，印尼籍默认不选（只写 restMap，不写 savedMap）
   let hasDefaulted = false
   for (const person of activePersonnel.value) {
     if (!recordPersonnelIds.has(person.id)) {
-      restMap[person.id] = [...defaultSundays]
+      restMap[person.id] = isIndonesianPersonnel(person.id) ? [] : [...defaultSundays]
       // 只有自己能编辑的人员才标记为 dirty
       if (canEditRow(person.id)) {
         hasDefaulted = true
@@ -304,9 +368,17 @@ async function handleSave() {
 
   saving.value = true
   try {
+    const editableRows = tableRows.value.filter((row) => canEditRow(row.personnelId))
+    for (const row of editableRows) {
+      const validationError = validateIndonesianRestDays(row.personnelId)
+      if (validationError) {
+        ElMessage.warning(`${row.name}：${validationError}`)
+        return
+      }
+    }
+
     // 只保存当前用户有权修改的人员记录
-    const records: MonthlyRestRecord[] = tableRows.value
-      .filter((row) => canEditRow(row.personnelId))
+    const records: MonthlyRestRecord[] = editableRows
       .map((row) => ({
         id: `${row.personnelId}_${currentYear.value}_${String(currentMonth.value).padStart(2, '0')}`,
         personnelId: row.personnelId,
@@ -333,6 +405,12 @@ async function handleSaveRow(personnelId: string) {
 
   // 若当前行无变更则不提交
   if (!hasRowChanges(personnelId)) return
+
+  const validationError = validateIndonesianRestDays(personnelId)
+  if (validationError) {
+    ElMessage.warning(validationError)
+    return
+  }
 
   rowSavingId.value = personnelId
   try {
@@ -362,17 +440,28 @@ async function handleSaveRow(personnelId: string) {
   }
 }
 
-/** 导出 Excel */
-const exporting = ref(false)
-async function handleExport() {
-  exporting.value = true
+/** 导出 Excel（仅当前班组筛选后显示的人员，按国籍分开） */
+const exportingChina = ref(false)
+const exportingIndonesia = ref(false)
+
+async function handleExportByNationality(nationality: '中国' | '印度尼西亚') {
+  const personnelIds = tableRows.value
+    .filter((row) => nationalityMap.value.get(row.personnelId) === nationality)
+    .map((row) => row.personnelId)
+  if (!personnelIds.length) {
+    ElMessage.warning(`当前没有可导出的${getExportNationalityLabel(nationality)}人员，请先勾选班组`)
+    return
+  }
+
+  const exportingRef = nationality === NATIONALITY.INDONESIA ? exportingIndonesia : exportingChina
+  exportingRef.value = true
   try {
-    await downloadMonthlyRestExcel(currentYear.value, currentMonth.value)
-    ElMessage.success('导出成功')
+    await downloadMonthlyRestExcel(currentYear.value, currentMonth.value, personnelIds, nationality)
+    ElMessage.success(`${getExportNationalityLabel(nationality)} Excel 导出成功`)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '导出失败')
   } finally {
-    exporting.value = false
+    exportingRef.value = false
   }
 }
 
@@ -478,60 +567,62 @@ onMounted(() => {
     <div class="toolbar">
       <div class="month-switcher">
         <el-button link @click="changeMonth(-1)">
-          <el-icon><ArrowLeft /></el-icon>
+          <el-icon>
+            <ArrowLeft />
+          </el-icon>
         </el-button>
         <span class="month-label">{{ monthLabel }}</span>
         <el-button link @click="changeMonth(1)">
-          <el-icon><ArrowRight /></el-icon>
+          <el-icon>
+            <ArrowRight />
+          </el-icon>
         </el-button>
       </div>
 
       <div v-if="isAdmin" class="team-filters">
-        <el-check-tag
-          v-for="team in teamOptions"
-          :key="team.value"
-          :checked="teamVisible[team.value]"
-          size="small"
-          @change="toggleTeam(team.value)"
-        >
+        <el-check-tag v-for="team in teamOptions" :key="team.value" :checked="teamVisible[team.value]" size="small"
+          @change="toggleTeam(team.value)">
           {{ team.label }}
         </el-check-tag>
       </div>
 
-      <div class="hint-row">
-        <div class="table-hint">
-          <el-icon><InfoFilled /></el-icon>
-          点击方格切换休息日，仅<strong>周六、周日</strong>可选
+      <div class="hint-column">
+        <div class="hint-line">
+          <span class="hint-icon-slot">
+            <el-icon class="hint-icon">
+              <InfoFilled />
+            </el-icon>
+          </span>
+          <span class="hint-content">
+            中国籍：<strong>周六、周日</strong>可选（同周选其一），另可再选<strong>1</strong>个非周末任意日
+            &nbsp;&nbsp;&nbsp;&nbsp;
+            印尼籍：当月任意日期可选，每月<strong>1-4</strong>天
+          </span>
         </div>
-        <div v-if="dutyWarningsByTeam.length > 0" class="duty-hints">
-          <div
-            v-for="group in dutyWarningsByTeam"
-            :key="group.team"
-            class="duty-hint"
-          >
-            <el-icon><WarningFilled /></el-icon>
-            <span>{{ group.team }}：{{ group.dates.join('、') }} 没有人值班，请安排至少一人值班</span>
-          </div>
+        <div v-for="group in dutyWarningsByTeam" :key="group.team" class="hint-line hint-line--warning">
+          <span class="hint-icon-slot">
+            <el-icon class="hint-icon">
+              <WarningFilled />
+            </el-icon>
+          </span>
+          <span class="hint-content">
+            {{ group.team }}：{{ group.dates.join('、') }} 没有人值班，请安排至少一人值班
+          </span>
         </div>
       </div>
 
       <div class="toolbar-right">
-        <el-button
-          v-if="isAdmin"
-          size="small"
-          :loading="exporting"
-          @click="handleExport"
-        >
-          导出 Excel
-        </el-button>
-        <el-button
-          v-if="isAdmin"
-          type="primary"
-          size="small"
-          :loading="saving"
-          :disabled="tableRows.length === 0"
-          @click="handleSave"
-        >
+        <div v-if="isAdmin" class="export-btn-group">
+          <el-button size="small" :loading="exportingChina" @click="handleExportByNationality(NATIONALITY.CHINA)">
+            导出中国籍 Excel
+          </el-button>
+          <el-button size="small" :loading="exportingIndonesia"
+            @click="handleExportByNationality(NATIONALITY.INDONESIA)">
+            导出印尼籍 Excel
+          </el-button>
+        </div>
+        <el-button v-if="isAdmin" type="primary" size="small" :loading="saving" :disabled="tableRows.length === 0"
+          @click="handleSave">
           保存计划
         </el-button>
       </div>
@@ -539,68 +630,30 @@ onMounted(() => {
 
     <!-- 数据表格 -->
     <div class="table-wrapper" v-loading="loading">
-      <el-table
-        :data="tableRows"
-        border
-        stripe
-        size="small"
-        height="100%"
-        :fit="false"
-        class="rest-table"
-      >
+      <el-table :data="tableRows" border stripe size="small" height="100%" :fit="false" class="rest-table">
         <!-- 固定列：序号 -->
-        <el-table-column
-          fixed="left"
-          type="index"
-          label="序号"
-          width="30"
-          align="center"
-        />
+        <el-table-column fixed="left" type="index" label="序号" width="30" align="center" />
 
         <!-- 固定列：姓名 -->
-        <el-table-column
-          fixed="left"
-          prop="name"
-          label="姓名"
-          width="80"
-        />
+        <el-table-column fixed="left" prop="name" label="姓名" width="80" />
 
         <!-- 固定列：班组 -->
-        <el-table-column
-          fixed="left"
-          prop="team"
-          label="班组"
-          width="55"
-          align="center"
-        />
+        <el-table-column fixed="left" prop="team" label="班组" width="55" align="center" />
 
         <!-- 固定列：休息日数 -->
-        <el-table-column
-          fixed="left"
-          class-name="rest-count-col"
-          :width="REST_COUNT_COL_WIDTH"
-          align="center"
-        >
+        <el-table-column fixed="left" class-name="rest-count-col" :width="REST_COUNT_COL_WIDTH" align="center">
           <template #header>
             <span class="rest-count-header">休息<br>天数</span>
           </template>
           <template #default="{ row }">
-            <span
-              class="rest-count"
-              :class="{ 'is-active': getRestCount(row.personnelId) > 0 }"
-            >
+            <span class="rest-count" :class="{ 'is-active': getRestCount(row.personnelId) > 0 }">
               {{ getRestCount(row.personnelId) }}
             </span>
           </template>
         </el-table-column>
 
         <!-- 动态列：每月每一天一列 -->
-        <el-table-column
-          v-for="dayInfo in allDays"
-          :key="dayInfo.date"
-          :width="columnWidth"
-          align="center"
-        >
+        <el-table-column v-for="dayInfo in allDays" :key="dayInfo.date" :width="columnWidth" align="center">
           <template #header>
             <div class="day-header" :class="{ 'is-weekend': dayInfo.weekday === '周六' || dayInfo.weekday === '周日' }">
               <span class="day-date">{{ dayInfo.day }}</span>
@@ -609,19 +662,15 @@ onMounted(() => {
           </template>
 
           <template #default="{ row }">
-            <div
-              v-if="dayInfo.weekday === '周六' || dayInfo.weekday === '周日'"
-              class="rest-cell"
-              :class="[
-                getRestCellStatusClass(row.personnelId, dayInfo.date),
-                {
-                  'is-saturday': dayInfo.weekday === '周六',
-                  'is-sunday': dayInfo.weekday === '周日',
-                  'is-readonly': !canEditRow(row.personnelId),
-                },
-              ]"
-              @click="canEditRow(row.personnelId) && toggleRestDay(row.personnelId, dayInfo.date)"
-            >
+            <div v-if="isDaySelectable(row.personnelId, dayInfo.weekday)" class="rest-cell" :class="[
+              getRestCellStatusClass(row.personnelId, dayInfo.date),
+              {
+                'is-saturday': dayInfo.weekday === '周六',
+                'is-sunday': dayInfo.weekday === '周日',
+                'is-weekday': dayInfo.weekday !== '周六' && dayInfo.weekday !== '周日',
+                'is-readonly': !canEditRow(row.personnelId),
+              },
+            ]" @click="canEditRow(row.personnelId) && toggleRestDay(row.personnelId, dayInfo.date)">
               <el-icon v-if="isRestDay(row.personnelId, dayInfo.date)" :size="12">
                 <Check />
               </el-icon>
@@ -631,21 +680,11 @@ onMounted(() => {
         </el-table-column>
 
         <!-- 操作列：普通用户按行保存 -->
-        <el-table-column
-          fixed="right"
-          label="操作"
-          width="80"
-          align="center"
-        >
+        <el-table-column fixed="right" label="操作" width="80" align="center">
           <template #default="{ row }">
-            <el-button
-              v-if="shouldShowRowSaveButton(row)"
-              type="primary"
-              size="small"
-              :loading="rowSavingId === row.personnelId"
-              :disabled="isLocked || !hasRowChanges(row.personnelId)"
-              @click="handleSaveRow(row.personnelId)"
-            >
+            <el-button v-if="shouldShowRowSaveButton(row)" type="primary" size="small"
+              :loading="rowSavingId === row.personnelId" :disabled="isLocked || !hasRowChanges(row.personnelId)"
+              @click="handleSaveRow(row.personnelId)">
               保存
             </el-button>
           </template>
@@ -678,28 +717,41 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
-.hint-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.duty-hints {
+.hint-column {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-.duty-hint {
+.hint-line {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  white-space: nowrap;
+}
+
+.hint-icon-slot {
+  width: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hint-content {
+  color: var(--el-text-color-secondary);
+}
+
+.hint-line--warning .hint-content {
   color: var(--el-color-warning);
 }
 
-.duty-hint .el-icon {
+.hint-icon {
   font-size: 14px;
   flex-shrink: 0;
 }
@@ -732,18 +784,15 @@ onMounted(() => {
   margin-left: auto;
 }
 
-.table-hint {
+.export-btn-group {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
   flex-shrink: 0;
-  white-space: nowrap;
 }
 
-.table-hint .el-icon {
-  font-size: 14px;
+.export-btn-group .el-button+.el-button {
+  margin-left: 0;
 }
 
 .table-wrapper {
@@ -865,6 +914,10 @@ onMounted(() => {
   background: var(--el-fill-color-extra-light);
 }
 
+.rest-cell.is-weekday {
+  background: var(--el-fill-color-blank);
+}
+
 .rest-cell.is-rest {
   background: var(--el-color-success-light-7);
   border-color: var(--el-color-success);
@@ -931,6 +984,10 @@ onMounted(() => {
 
 .rest-cell.is-readonly:not(.is-finalized).is-sunday:hover {
   background: var(--el-fill-color-extra-light);
+}
+
+.rest-cell.is-readonly:not(.is-finalized).is-weekday:hover {
+  background: var(--el-fill-color-blank);
 }
 
 .rest-cell.is-readonly.is-rest:hover {

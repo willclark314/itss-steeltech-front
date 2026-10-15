@@ -34,6 +34,12 @@ export interface PersonnelFilterParams {
   status?: string
 }
 
+export interface PersonnelSelectOption {
+  id: string
+  name: string
+  team: string
+}
+
 export interface PersonnelRecordGroup {
   key: string
   label: string
@@ -48,6 +54,20 @@ export type PersonnelFormData = PersonnelRecord
 
 export class PersonnelForm {
   static readonly WORKSHOP = '钢结构技术科' as const
+  static readonly WORKSHOP_DEV = '开发人员' as const
+
+  /** 班组 → 默认科室 */
+  static readonly TEAM_WORKSHOP_MAP: Record<string, string> = {
+    设计组: PersonnelForm.WORKSHOP,
+    细化组: PersonnelForm.WORKSHOP,
+    开发组: PersonnelForm.WORKSHOP_DEV,
+  }
+
+  static readonly WORKSHOP_ORDER = [
+    PersonnelForm.WORKSHOP,
+    PersonnelForm.WORKSHOP_DEV,
+  ] as const
+
   static readonly STATUS = {
     ACTIVE: 'active',
     INACTIVE: 'inactive',
@@ -64,7 +84,13 @@ export class PersonnelForm {
   static readonly TEAM_OPTIONS = [
     { label: '设计组', value: '设计组' },
     { label: '细化组', value: '细化组' },
+    { label: '开发组', value: '开发组' },
   ] as const
+
+  static resolveWorkshopByTeam(team = '', fallback: string = PersonnelForm.WORKSHOP) {
+    const mapped = PersonnelForm.TEAM_WORKSHOP_MAP[team.trim()]
+    return mapped || fallback || PersonnelForm.WORKSHOP
+  }
 
   static readonly NATIONALITY = {
     CHINA: '中国',
@@ -111,7 +137,6 @@ export class PersonnelForm {
   static readonly FORM_RULES: FormRules = {
     name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
     employeeNo: [{ required: true, message: '请输入工号', trigger: 'blur' }],
-    team: [{ required: true, message: '请选择班组', trigger: 'change' }],
     nationality: [{ required: true, message: '请选择国籍', trigger: 'change' }],
     status: [{ required: true, message: '请选择状态', trigger: 'change' }],
   }
@@ -169,7 +194,7 @@ export class PersonnelForm {
   static sample(
     id: string,
     name: string,
-    team: '设计组' | '细化组',
+    team: '设计组' | '细化组' | '开发组',
     overrides: Partial<PersonnelRecord> = {},
   ): PersonnelRecord {
     const index = Number(id.replace('PER', ''))
@@ -197,7 +222,7 @@ export class PersonnelForm {
       passportExpiry: '2035-12-31',
       position: isDesign ? '设计工程师' : '细化工程师',
       nationality,
-      workshop: PersonnelForm.WORKSHOP,
+      workshop: PersonnelForm.resolveWorkshopByTeam(team),
       team,
       birthDate: `199${index % 10}-${String((index % 12) + 1).padStart(2, '0')}-15`,
       age: 28 + (index % 12),
@@ -263,7 +288,9 @@ export class PersonnelForm {
   }
 
   applyForm(form: PersonnelFormData) {
-    Object.assign(this.record, form, { workshop: PersonnelForm.WORKSHOP })
+    Object.assign(this.record, form, {
+      workshop: PersonnelForm.resolveWorkshopByTeam(form.team, form.workshop),
+    })
   }
 
   static cloneSamples(data: PersonnelRecord[]) {
@@ -362,5 +389,96 @@ export class PersonnelForm {
       const matchStatus = !status || item.status === status
       return matchKeyword && matchStatus
     })
+  }
+
+  static readonly EMPTY_WORKSHOP_KEY = '__empty_workshop__'
+
+  static normalizeWorkshopKey(workshop = '') {
+    const text = workshop.trim()
+    return text || PersonnelForm.EMPTY_WORKSHOP_KEY
+  }
+
+  static formatWorkshopLabel(workshopKey: string) {
+    if (workshopKey === PersonnelForm.EMPTY_WORKSHOP_KEY || !workshopKey.trim()) {
+      return '未分配科室'
+    }
+    return workshopKey
+  }
+
+  /** 按车间/科室生成 Tab，默认科室优先，其余按名称排序 */
+  static collectWorkshopTabs(records: PersonnelRecord[]) {
+    const counts = new Map<string, number>()
+    for (const record of records) {
+      const key = PersonnelForm.normalizeWorkshopKey(record.workshop)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
+    const preferredOrder = PersonnelForm.WORKSHOP_ORDER as readonly string[]
+    const keys = [...counts.keys()].sort((a, b) => {
+      const aPreferred = preferredOrder.indexOf(a)
+      const bPreferred = preferredOrder.indexOf(b)
+      if (aPreferred !== -1 || bPreferred !== -1) {
+        if (aPreferred === -1) return 1
+        if (bPreferred === -1) return -1
+        return aPreferred - bPreferred
+      }
+      if (a === PersonnelForm.EMPTY_WORKSHOP_KEY) return 1
+      if (b === PersonnelForm.EMPTY_WORKSHOP_KEY) return -1
+      return a.localeCompare(b, 'zh-CN')
+    })
+
+    return keys.map((key) => ({
+      key,
+      label: PersonnelForm.formatWorkshopLabel(key),
+      count: counts.get(key) ?? 0,
+    }))
+  }
+
+  static filterByWorkshop(records: PersonnelRecord[], workshopKey: string) {
+    if (!workshopKey) return records
+    return records.filter(
+      (record) => PersonnelForm.normalizeWorkshopKey(record.workshop) === workshopKey,
+    )
+  }
+
+  static formatSelectLabel(person: Pick<PersonnelSelectOption, 'name' | 'team'>) {
+    return `${person.name} · ${person.team}`
+  }
+
+  static buildAssignSelectOptions(
+    personnel: PersonnelSelectOption[],
+    extraAssignees: PersonnelSelectOption[] = [],
+  ): PersonnelSelectOption[] {
+    const optionMap = new Map<string, PersonnelSelectOption>()
+
+    for (const person of personnel) {
+      optionMap.set(person.id, person)
+    }
+
+    for (const person of extraAssignees) {
+      if (!optionMap.has(person.id)) {
+        optionMap.set(person.id, person)
+      }
+    }
+
+    return [...optionMap.values()].sort((a, b) => {
+      const teamCompare = a.team.localeCompare(b.team, 'zh-CN')
+      return teamCompare !== 0 ? teamCompare : a.name.localeCompare(b.name, 'zh-CN')
+    })
+  }
+
+  static filterAssignSelectOptions(
+    options: PersonnelSelectOption[],
+    team = '',
+  ): PersonnelSelectOption[] {
+    if (!team) return options
+    return options.filter((person) => person.team === team)
+  }
+
+  static collectTeamFilterOptions(options: PersonnelSelectOption[]) {
+    const teams = [...new Set(options.map((person) => person.team).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b, 'zh-CN'),
+    )
+    return [{ label: '全部班组', value: '' }, ...teams.map((team) => ({ label: team, value: team }))]
   }
 }

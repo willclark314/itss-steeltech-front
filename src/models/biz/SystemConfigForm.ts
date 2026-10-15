@@ -71,13 +71,5 @@ export class SystemConfigForm {
         trigger: 'change',
       },
     ],
-    'localWorkPath.drive': [
-      { required: true, message: '请输入默认盘符', trigger: 'blur' },
-      {
-        pattern: /^[A-Za-z]$/,
-        message: '盘符为单个字母',
-        trigger: 'blur',
-      },
-    ],
   } as const
 }

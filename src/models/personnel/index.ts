@@ -8,6 +8,7 @@ export type {
   PersonnelNationality,
   PersonnelRecord,
   PersonnelRecordGroup,
+  PersonnelSelectOption,
   PersonnelStatus,
 } from './PersonnelForm'
 export type {

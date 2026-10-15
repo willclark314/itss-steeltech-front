@@ -26,8 +26,12 @@ export class DetailTeamScheduleForm {
     return ProjectForm.hasDetailGroupNature(record)
   }
 
-  static isActiveProject(record: ProjectRecord) {
-    return record.status === ProjectForm.STATUS.ACTIVE
+  /** 可排班：进行中或未开始 */
+  static isSchedulableProject(record: ProjectRecord) {
+    return (
+      record.status === ProjectForm.STATUS.ACTIVE ||
+      record.status === ProjectForm.STATUS.NOT_STARTED
+    )
   }
 
   static isPausedProject(record: ProjectRecord) {
@@ -102,15 +106,16 @@ export class DetailTeamScheduleForm {
     if (!DetailTeamScheduleForm.isDetailProject(record)) return false
 
     const unassigned = DetailTeamScheduleForm.isUnassigned(record)
-    const isActive = DetailTeamScheduleForm.isActiveProject(record)
+    const isSchedulable = DetailTeamScheduleForm.isSchedulableProject(record)
     const isPaused = DetailTeamScheduleForm.isPausedProject(record)
     const isCancelled = DetailTeamScheduleForm.isCancelledProject(record)
     const isDetailCompleted = DetailTeamScheduleForm.isDetailCompleted(record)
 
-    if (isActive && !isDetailCompleted && unassigned) return true
+    if (isSchedulable && !isDetailCompleted && unassigned) return true
     if (includePaused && isPaused) return true
     if (includeCancelled && isCancelled) return true
-    if (includeAssigned && isActive && !isDetailCompleted && !unassigned) return true
+    if (includeAssigned && isSchedulable && !isDetailCompleted && !unassigned)
+      return true
 
     return false
   }
@@ -165,7 +170,7 @@ export class DetailTeamScheduleForm {
       .filter(
         (item) =>
           DetailTeamScheduleForm.isDetailProject(item) &&
-          DetailTeamScheduleForm.isActiveProject(item) &&
+          DetailTeamScheduleForm.isSchedulableProject(item) &&
           !DetailTeamScheduleForm.isDetailCompleted(item) &&
           DetailTeamScheduleForm.isAssignedTo(item, personnelId),
       )

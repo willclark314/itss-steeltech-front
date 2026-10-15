@@ -16,13 +16,14 @@
     <div class="about-group-title">功能模块</div>
     <el-descriptions :column="1" border label-width="120px" class="about-section">
       <el-descriptions-item label="门户">系统首页与关于信息</el-descriptions-item>
-      <el-descriptions-item label="业务系统">联系单管理、项目信息维护</el-descriptions-item>
+      <el-descriptions-item label="钢构技术系统">联系单管理、项目信息维护</el-descriptions-item>
+      <el-descriptions-item label="生产计划系统">生产计划相关功能（建设中）</el-descriptions-item>
       <el-descriptions-item label="人员系统">人员档案管理、休假日历与记录</el-descriptions-item>
     </el-descriptions>
 
     <div class="about-group-title">使用说明</div>
     <ul class="about-list">
-      <li>通过顶部标签切换「门户」「业务系统」「人员系统」进入对应功能。</li>
+      <li>通过顶部标签切换「门户」「钢构技术系统」「生产计划系统」「人员系统」进入对应功能。</li>
       <li>左侧菜单可打开具体页面；已打开的页面可在内容区标签栏中切换或关闭。</li>
     </ul>
   </el-card>

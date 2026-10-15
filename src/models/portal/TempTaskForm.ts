@@ -1,12 +1,12 @@
 import type { TempTaskRecord } from '@/api/tempTasks'
 
 export class TempTaskForm {
-  static readonly DATETIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
+  static readonly DATE_FORMAT = 'YYYY-MM-DD'
 
-  static nowDatetime(): string {
+  static todayDate(): string {
     const now = new Date()
     const pad = (value: number) => String(value).padStart(2, '0')
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
   }
 
   static formatDatetime(value: string): string {
@@ -33,13 +33,17 @@ export class TempTaskForm {
     startTime: string
     completedAt: string
     personnelIds: string[]
+    isRelatedProject: boolean
+    relatedProjectNo: string
   } {
     return {
       name: '',
       description: '',
-      startTime: TempTaskForm.nowDatetime(),
+      startTime: TempTaskForm.todayDate(),
       completedAt: '',
       personnelIds: personnelId ? [personnelId] : [],
+      isRelatedProject: false,
+      relatedProjectNo: '',
     }
   }
 }

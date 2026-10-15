@@ -14,6 +14,7 @@ export interface User {
   loginType?: LoginType
   profile?: UserPersonnelProfile
   roles?: string[]
+  permissions?: string[]
 }
 
 export function getToken(): string | null {

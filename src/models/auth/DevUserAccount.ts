@@ -4,7 +4,7 @@ import type { PersonnelRecord } from '../personnel/PersonnelForm'
 export type DevAccountKey = 'admin' | 'user'
 
 export const DEV_USER_PROFILES: Record<DevAccountKey, PersonnelRecord> = {
-  admin: PersonnelForm.sample('DEV001', '管理员', '设计组', {
+  admin: PersonnelForm.sample('DEV001', '管理员', '开发组', {
     employeeNo: '42609901',
     idCardNo: '50010419880001',
     passportNo: 'ER3990001',
@@ -23,7 +23,7 @@ export const DEV_USER_PROFILES: Record<DevAccountKey, PersonnelRecord> = {
     dormitoryNo: 'B3_608',
     status: 'active',
   }),
-  user: PersonnelForm.sample('DEV002', '杜剑龙', '设计组', {
+  user: PersonnelForm.sample('DEV002', '测试用户', '开发组', {
     employeeNo: '42609902',
     idCardNo: '50010419910002',
     passportNo: 'ER3990002',

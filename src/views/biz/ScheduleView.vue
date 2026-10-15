@@ -21,11 +21,13 @@ const personnelIds = computed(() => ProjectScheduleForm.collectPersonnelIds(sche
 const groupVisible = reactive<Record<string, boolean>>({
   设计组: true,
   细化组: true,
+  开发组: true,
 })
 
 const groupExpanded = reactive<Record<string, boolean>>({
   设计组: true,
   细化组: true,
+  开发组: true,
 })
 
 const personVisible = reactive<Record<string, boolean>>({})

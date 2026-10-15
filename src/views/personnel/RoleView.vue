@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchPersonnelList } from '@/api/personnel'
 import { deleteRole, fetchPermissionList, fetchRoleList } from '@/api/roles'
 import RoleFormDialog from '@/components/personnel/RoleFormDialog.vue'
 import { RoleForm } from '@/models/personnel'
 import type { PermissionRecord, PersonnelRecord, RoleRecord, RoleStatus } from '@/models/personnel'
+import { canEditPage } from '@/utils/permission'
+import { loadNavigationOrder } from '@/utils/navigationOrder'
 
+const canEdit = computed(() => canEditPage('role'))
 const loading = ref(false)
 const dialogVisible = ref(false)
 const editingRole = ref<RoleRecord | null>(null)
@@ -53,6 +56,7 @@ async function loadPersonnelOptions() {
 }
 
 onMounted(() => {
+  void loadNavigationOrder()
   void loadPermissionOptions()
   void loadPersonnelOptions()
   void loadRoles()
@@ -70,6 +74,11 @@ function handleReset() {
 
 function getStatusMeta(status: RoleStatus) {
   return statusMap[status]
+}
+
+function rolePermissionGroups(row: unknown) {
+  const record = row as RoleRecord
+  return RoleForm.groupAccessiblePagesByModule(permissionOptions.value, record.permissionIds)
 }
 
 function openCreateDialog() {
@@ -130,7 +139,7 @@ async function handleDelete(row: RoleRecord) {
     <template #header>
       <div class="card-header">
         <span>角色</span>
-        <el-button type="primary" @click="openCreateDialog">新建角色</el-button>
+        <el-button v-if="canEdit" type="primary" @click="openCreateDialog">新建角色</el-button>
       </div>
     </template>
 
@@ -138,7 +147,7 @@ async function handleDelete(row: RoleRecord) {
       <el-form-item label="关键词">
         <el-input
           v-model="searchForm.keyword"
-          placeholder="角色名称 / 编码 / 人员 / 模块 / 页面"
+          placeholder="角色名称 / 编码 / 科室 / 人员 / 模块 / 页面"
           clearable
           style="width: 260px"
           @keyup.enter="handleSearch"
@@ -161,30 +170,46 @@ async function handleDelete(row: RoleRecord) {
     </el-form>
 
     <el-table v-loading="loading" :data="filteredData" stripe class="role-table">
-      <el-table-column prop="name" label="角色名称" min-width="140" />
-      <el-table-column prop="code" label="角色编码" width="120" />
+      <el-table-column prop="name" label="角色名称" width="140" />
+      <el-table-column prop="code" label="角色编码" width="140" />
       <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
-      <el-table-column label="关联人员" min-width="180">
+      <el-table-column label="关联范围" min-width="220">
         <template #default="{ row }">
-          <div v-if="row.assignedPersonnel?.length" class="tag-list">
-            <el-tag
-              v-for="person in row.assignedPersonnel"
-              :key="person.id"
-              size="small"
-              type="info"
-              :title="`${person.name} · ${person.team}`"
-            >
-              {{ person.name }}
-            </el-tag>
+          <div
+            v-if="row.assignedWorkshops?.length || row.assignedPersonnel?.length"
+            class="assign-scope"
+          >
+            <div v-if="row.assignedWorkshops?.length" class="tag-list">
+              <el-tag
+                v-for="workshop in row.assignedWorkshops"
+                :key="workshop || '__empty_workshop__'"
+                size="small"
+                type="warning"
+                :title="`${RoleForm.formatWorkshopLabel(workshop)} · 科室`"
+              >
+                {{ RoleForm.formatWorkshopLabel(workshop) }} · 科室
+              </el-tag>
+            </div>
+            <div v-if="row.assignedPersonnel?.length" class="tag-list">
+              <el-tag
+                v-for="person in row.assignedPersonnel"
+                :key="person.id"
+                size="small"
+                type="info"
+                :title="`${person.name} · ${person.team}`"
+              >
+                {{ person.name }}
+              </el-tag>
+            </div>
           </div>
           <span v-else class="text-muted">未关联</span>
         </template>
       </el-table-column>
       <el-table-column label="页面权限" min-width="300">
         <template #default="{ row }">
-          <div v-if="row.permissions?.length" class="permission-groups">
+          <div v-if="rolePermissionGroups(row).length" class="permission-groups">
             <div
-              v-for="group in RoleForm.groupPermissionsByModule(row.permissions)"
+              v-for="group in rolePermissionGroups(row)"
               :key="group.module"
               class="permission-module"
             >
@@ -194,9 +219,9 @@ async function handleDelete(row: RoleRecord) {
                   v-for="page in group.pages"
                   :key="page.pageKey"
                   size="small"
-                  :title="page.permissions.map((item) => item.code).join('\n')"
+                  :title="page.path"
                 >
-                  {{ RoleForm.formatPagePermissionSummary(page) }}
+                  {{ page.pageName }}
                 </el-tag>
               </div>
             </div>
@@ -211,7 +236,7 @@ async function handleDelete(row: RoleRecord) {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column v-if="canEdit" label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button type="primary" link @click="openEditDialog(row as RoleRecord)">编辑</el-button>
           <el-button type="danger" link @click="handleDelete(row as RoleRecord)">删除</el-button>
@@ -251,6 +276,12 @@ async function handleDelete(row: RoleRecord) {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.assign-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .permission-groups {

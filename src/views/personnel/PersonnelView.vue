@@ -1,15 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ArrowDown, Download, EditPen, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { fetchPersonnelList } from '@/api/personnel'
+import {
+  downloadPersonnelCsvTemplate,
+  fetchPersonnelList,
+  importPersonnelCsv,
+} from '@/api/personnel'
 import { PersonnelForm } from '@/models/personnel'
 import type { PersonnelGroupBy, PersonnelRecord } from '@/models/personnel'
 import PersonnelDetailDrawer from '@/components/personnel/PersonnelDetailDrawer.vue'
+import PersonnelFormDialog from '@/components/personnel/PersonnelFormDialog.vue'
 import PersonnelTable from '@/components/personnel/PersonnelTable.vue'
+import { canEditPage } from '@/utils/permission'
 
+const canEdit = computed(() => canEditPage('person'))
 const loading = ref(false)
+const exporting = ref(false)
+const importing = ref(false)
 const detailVisible = ref(false)
+const createVisible = ref(false)
 const currentRecord = ref<PersonnelRecord | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const activeWorkshop = ref('')
 
 const searchForm = reactive({
   keyword: '',
@@ -23,8 +36,32 @@ const tableData = ref<PersonnelRecord[]>([])
 const filteredData = ref<PersonnelRecord[]>([])
 const groupBy = ref<PersonnelGroupBy>('team')
 
-const recordGroups = computed(() => PersonnelForm.groupRecords(filteredData.value, groupBy.value))
+const workshopTabs = computed(() => PersonnelForm.collectWorkshopTabs(filteredData.value))
+
+const workshopData = computed(() =>
+  PersonnelForm.filterByWorkshop(filteredData.value, activeWorkshop.value),
+)
+
+const recordGroups = computed(() => PersonnelForm.groupRecords(workshopData.value, groupBy.value))
 const isGrouped = computed(() => Boolean(groupBy.value))
+
+function countByStatus(members: PersonnelRecord[], status: PersonnelRecord['status']) {
+  return members.filter((item) => item.status === status).length
+}
+
+watch(
+  workshopTabs,
+  (tabs) => {
+    if (!tabs.length) {
+      activeWorkshop.value = ''
+      return
+    }
+    if (!tabs.some((tab) => tab.key === activeWorkshop.value)) {
+      activeWorkshop.value = tabs[0]!.key
+    }
+  },
+  { immediate: true },
+)
 
 async function loadPersonnel() {
   loading.value = true
@@ -75,13 +112,105 @@ function handlePersonnelDeleted(id: string) {
   currentRecord.value = null
   handleSearch()
 }
+
+function openCreateDialog() {
+  createVisible.value = true
+}
+
+function handlePersonnelCreated(record: PersonnelRecord) {
+  tableData.value.unshift(record)
+  handleSearch()
+  const key = PersonnelForm.normalizeWorkshopKey(record.workshop)
+  if (workshopTabs.value.some((tab) => tab.key === key)) {
+    activeWorkshop.value = key
+  }
+}
+
+async function handleExportCsv() {
+  exporting.value = true
+  try {
+    await downloadPersonnelCsvTemplate()
+    ElMessage.success('CSV 模板已下载，填写后可通过「导入 CSV」上传')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function triggerImport() {
+  fileInputRef.value?.click()
+}
+
+async function handleImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  importing.value = true
+  try {
+    const result = await importPersonnelCsv(file)
+    tableData.value = result.items
+    handleSearch()
+    ElMessage.success(result.message || '导入成功')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '导入失败')
+  } finally {
+    importing.value = false
+  }
+}
+
+function handleCreateCommand(command: string) {
+  if (command === 'manual') {
+    openCreateDialog()
+    return
+  }
+  if (command === 'export') {
+    void handleExportCsv()
+    return
+  }
+  if (command === 'import') {
+    triggerImport()
+  }
+}
 </script>
 
 <template>
   <el-card shadow="never">
     <template #header>
-      <span>人员</span>
+      <div class="card-header">
+        <span>人员</span>
+        <el-dropdown
+          v-if="canEdit"
+          trigger="click"
+          :disabled="exporting || importing"
+          @command="handleCreateCommand"
+        >
+          <el-button type="primary" :loading="exporting || importing">
+            新建
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="manual" :icon="EditPen">手动新建</el-dropdown-item>
+              <el-dropdown-item command="export" :icon="Download" divided>
+                导出 CSV 模板
+              </el-dropdown-item>
+              <el-dropdown-item command="import" :icon="Upload">导入 CSV</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </template>
+
+    <input
+      ref="fileInputRef"
+      type="file"
+      accept=".csv,text/csv"
+      class="hidden-file-input"
+      @change="handleImportFile"
+    />
 
     <el-form :inline="true" :model="searchForm" class="search-form">
       <el-form-item label="关键词">
@@ -119,34 +248,51 @@ function handlePersonnelDeleted(id: string) {
       </el-form-item>
     </el-form>
 
-    <PersonnelTable
-      v-if="!isGrouped"
-      :data="filteredData"
-      :loading="loading"
-      :show-team="true"
-      :show-nationality="true"
-      :show-dormitory="true"
-      @row-click="openDetail"
-      @detail="openDetail"
-    />
+    <el-tabs v-model="activeWorkshop" class="workshop-tabs">
+      <el-tab-pane
+        v-for="tab in workshopTabs"
+        :key="tab.key"
+        :name="tab.key"
+        :label="`${tab.label}（${tab.count}）`"
+      />
+    </el-tabs>
 
-    <div v-else v-loading="loading" class="record-group-list">
-      <div v-for="group in recordGroups" :key="group.key" class="record-section">
-        <div class="record-section-header">
-          <span class="record-section-title">{{ group.label }}</span>
-          <span class="record-section-count">{{ group.members.length }} 人</span>
+    <template v-if="workshopTabs.length">
+      <PersonnelTable
+        v-if="!isGrouped"
+        :data="workshopData"
+        :loading="loading"
+        :show-workshop="false"
+        :show-team="true"
+        :show-nationality="true"
+        :show-dormitory="true"
+        @row-click="openDetail"
+        @detail="openDetail"
+      />
+
+      <div v-else v-loading="loading" class="record-group-list">
+        <div v-for="group in recordGroups" :key="group.key" class="record-section">
+          <div class="record-section-header">
+            <span class="record-section-title">{{ group.label }}</span>
+            <span class="record-section-count">
+              在职 {{ countByStatus(group.members, 'active') }} 人 · 离职
+              {{ countByStatus(group.members, 'inactive') }} 人
+            </span>
+          </div>
+          <PersonnelTable
+            :data="group.members"
+            :show-workshop="false"
+            :show-team="groupBy !== 'team'"
+            :show-nationality="groupBy !== 'nationality'"
+            :show-dormitory="groupBy !== 'dormitory'"
+            @row-click="openDetail"
+            @detail="openDetail"
+          />
         </div>
-        <PersonnelTable
-          :data="group.members"
-          :show-team="groupBy !== 'team'"
-          :show-nationality="groupBy !== 'nationality'"
-          :show-dormitory="groupBy !== 'dormitory'"
-          @row-click="openDetail"
-          @detail="openDetail"
-        />
+        <el-empty v-if="!recordGroups.length" description="暂无匹配人员" />
       </div>
-      <el-empty v-if="!recordGroups.length" description="暂无匹配人员" />
-    </div>
+    </template>
+    <el-empty v-else v-loading="loading" description="暂无匹配人员" />
   </el-card>
 
   <PersonnelDetailDrawer
@@ -156,11 +302,31 @@ function handlePersonnelDeleted(id: string) {
     @deleted="handlePersonnelDeleted"
     @closed="handleDetailClosed"
   />
+
+  <PersonnelFormDialog v-model="createVisible" @created="handlePersonnelCreated" />
 </template>
 
 <style scoped>
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .search-form {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+}
+
+.workshop-tabs {
+  margin-bottom: 12px;
+}
+
+.workshop-tabs :deep(.el-tabs__header) {
+  margin-bottom: 0;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .record-group-list {

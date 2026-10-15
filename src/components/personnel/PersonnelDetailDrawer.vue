@@ -78,7 +78,7 @@ async function handleSave() {
   saving.value = true
   try {
     const payload = PersonnelForm.createFormFromRecord(editForm)
-    payload.workshop = PersonnelForm.WORKSHOP
+    payload.workshop = PersonnelForm.resolveWorkshopByTeam(payload.team, payload.workshop)
     const updated = await updatePersonnel(props.record.id, payload)
     emit('updated', updated)
     isEditing.value = false
@@ -378,10 +378,13 @@ function formatDormitory(value: string | undefined) {
           <el-input v-model="editForm.position" />
         </el-form-item>
         <el-form-item label="车间/科室">
-          <el-input :model-value="PersonnelForm.WORKSHOP" disabled />
+          <el-input
+            :model-value="PersonnelForm.resolveWorkshopByTeam(editForm.team, editForm.workshop)"
+            disabled
+          />
         </el-form-item>
         <el-form-item label="班组" prop="team">
-          <el-select v-model="editForm.team" style="width: 100%">
+          <el-select v-model="editForm.team" clearable placeholder="可选" style="width: 100%">
             <el-option
               v-for="item in teamOptions"
               :key="item.value"

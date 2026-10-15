@@ -1,14 +1,19 @@
 import type { FormRules, UploadRawFile, UploadUserFile } from 'element-plus'
 import { checkContactPdfMd5 } from '@/api/contacts'
+import { snapshotFile, withFileReadGuard } from '@/utils/fileUpload'
 import { computeFileMd5 } from '@/utils/md5'
 import type { TagRecord } from '@/models/biz/tag'
 
-export type ContactStatus = 'pending' | 'processing' | 'done' | 'cancelled'
 export type ContactRelationType = 'primary' | 'supplement' | 'revision' | 'follow_up' | 'cancel'
 export type ProjectSourceType = 'own' | 'inherited' | 'added' | 'cancelled'
 export type ProjectMode = 'inherit' | 'split' | 'append'
 export type CancelScope = 'full' | 'partial'
 export type ContactFormType = 'contact' | 'processing'
+export type ContactLinkage = 'independent' | 'append'
+
+export type AttachmentUploadFile = UploadUserFile & {
+  attachmentId?: string
+}
 
 export interface ContactAttachment {
   id: string
@@ -34,7 +39,6 @@ export interface ContactRecord {
   receivedDate: string
   familyMaxReceivedDate?: string
   urgency: string
-  status: ContactStatus
   content: string
   parentId?: string
   rootId?: string
@@ -57,12 +61,17 @@ export interface ContactFormData {
   receivedDate: string
   urgency: string
   content: string
+  linkage: ContactLinkage
+  parentId: string
+  relationType?: ContactRelationType
   attachmentList: UploadUserFile[]
   primaryPdfList: UploadUserFile[]
   primaryPdfVersions?: ContactAttachment[]
 }
 
 export interface ChildContactFormData {
+  id: string
+  contactType: ContactFormType
   title: string
   receivedDate: string
   urgency: string
@@ -77,11 +86,10 @@ export interface ChildContactFormData {
 
 export interface ContactFilterParams {
   keyword?: string
-  status?: string
   tags?: string[]
 }
 
-export type ContactGroupBy = '' | 'status' | 'urgency'
+export type ContactGroupBy = '' | 'urgency'
 
 export interface ContactRecordGroup {
   key: string
@@ -99,6 +107,7 @@ export class ContactForm {
   static readonly JIAGONGDAN_PREFIX = '加工单-'
   static readonly JIAGONGDAN_DEFAULT_ID = '加工单'
   static readonly JIAGONGDAN_ID_REGEX = /^BRD\d{6}C\d{9}$/i
+  static readonly PREV_CONTACT_ID_STORAGE_PREFIX = 'steeltech.prevContactId.'
   static readonly FORM_TYPE_OPTIONS = [
     { label: '联系单', value: 'contact' as const },
     { label: '加工单', value: 'processing' as const },
@@ -120,6 +129,44 @@ export class ContactForm {
     return normalized.slice(0, sepIndex)
   }
 
+  /** 从项目号或加工单 ID 解析用于记忆上次联系单号的项目根号 */
+  static resolveRememberProjectKey(projectNos?: string[], contactId?: string): string {
+    for (const projectNo of projectNos || []) {
+      const base = ContactForm.parseBaseProjectNo(projectNo)
+      if (base) return base
+    }
+    const normalizedId = (contactId || '').trim()
+    if (normalizedId.startsWith(ContactForm.JIAGONGDAN_PREFIX)) {
+      return ContactForm.parseBaseProjectNo(
+        normalizedId.slice(ContactForm.JIAGONGDAN_PREFIX.length),
+      )
+    }
+    return ''
+  }
+
+  static loadRememberedContactId(projectKey: string): string {
+    const key = ContactForm.parseBaseProjectNo(projectKey)
+    if (!key || typeof localStorage === 'undefined') return ''
+    try {
+      const value = (localStorage.getItem(`${ContactForm.PREV_CONTACT_ID_STORAGE_PREFIX}${key}`) || '').trim()
+      if (!value || ContactForm.isProcessingFormId(value)) return ''
+      return value
+    } catch {
+      return ''
+    }
+  }
+
+  static saveRememberedContactId(projectKey: string, contactId: string): void {
+    const key = ContactForm.parseBaseProjectNo(projectKey)
+    const id = (contactId || '').trim()
+    if (!key || !id || ContactForm.isProcessingFormId(id) || typeof localStorage === 'undefined') return
+    try {
+      localStorage.setItem(`${ContactForm.PREV_CONTACT_ID_STORAGE_PREFIX}${key}`, id)
+    } catch {
+      // ignore quota / private mode
+    }
+  }
+
   static formatDisplayId(id: string, projectNo?: string): string {
     if (ContactForm.isProcessingFormId(id)) {
       const normalizedProjectNo = ContactForm.parseBaseProjectNo(projectNo || '')
@@ -128,18 +175,21 @@ export class ContactForm {
     return id
   }
 
+  static formatOptionLabel(record: ContactRecord): string {
+    const displayId = ContactForm.formatDisplayId(record.id, record.projectNos?.[0])
+    return `${displayId} · ${record.title}`
+  }
+
+  static buildProcessingContactId(projectNo: string): string {
+    const base = ContactForm.parseBaseProjectNo(projectNo)
+    return base ? `${ContactForm.JIAGONGDAN_PREFIX}${base}` : ContactForm.JIAGONGDAN_DEFAULT_ID
+  }
+
   static maxProjectNoForSort(projectNos?: string[]): string {
     const nos = (projectNos || []).filter((no) => no.trim())
     if (!nos.length) return ''
     return nos.reduce((max, no) => (no.localeCompare(max, 'zh-CN') > 0 ? no : max), nos[0])
   }
-
-  static readonly STATUS = {
-    PENDING: 'pending',
-    PROCESSING: 'processing',
-    DONE: 'done',
-    CANCELLED: 'cancelled',
-  } as const
 
   static readonly RELATION_TYPE_OPTIONS = [
     { label: '补充单', value: 'supplement' as const },
@@ -169,29 +219,10 @@ export class ContactForm {
     cancelled: { label: '取消', tagType: 'danger' },
   }
 
-  static readonly STATUS_OPTIONS = [
-    { label: '全部', value: '' },
-    { label: '待处理', value: ContactForm.STATUS.PENDING },
-    { label: '处理中', value: ContactForm.STATUS.PROCESSING },
-    { label: '已完成', value: ContactForm.STATUS.DONE },
-    { label: '已取消', value: ContactForm.STATUS.CANCELLED },
-  ]
-
-  static readonly STATUS_MAP: Record<
-    ContactStatus,
-    { label: string; type: 'warning' | 'primary' | 'success' | 'info' }
-  > = {
-    pending: { label: '待处理', type: 'warning' },
-    processing: { label: '处理中', type: 'primary' },
-    done: { label: '已完成', type: 'success' },
-    cancelled: { label: '已取消', type: 'info' },
-  }
-
   static readonly URGENCY_OPTIONS = ['普通', '紧急'] as const
 
   static readonly GROUP_BY_OPTIONS = [
     { label: '列表', value: '' as ContactGroupBy },
-    { label: '按状态', value: 'status' as ContactGroupBy },
     { label: '按紧急程度', value: 'urgency' as ContactGroupBy },
   ] as const
 
@@ -200,8 +231,42 @@ export class ContactForm {
     receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
   }
 
+  static readonly PROCESSING_FORM_RULES: FormRules = {
+    title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
+    receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
+    projectNos: [
+      {
+        type: 'array',
+        required: true,
+        min: 1,
+        message: '加工单须填写项目号',
+        trigger: 'change',
+      },
+    ],
+  }
+
   static readonly EDIT_FORM_RULES: FormRules = {
     id: [{ required: true, message: '请输入联系单号', trigger: 'blur' }],
+    title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
+    receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
+  }
+
+  static readonly PROCESSING_EDIT_FORM_RULES: FormRules = {
+    title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
+    receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
+    projectNos: [
+      {
+        type: 'array',
+        required: true,
+        min: 1,
+        message: '加工单须填写项目号',
+        trigger: 'change',
+      },
+    ],
+  }
+
+  static readonly CHILD_FORM_RULES: FormRules = {
+    id: [{ required: true, message: '请输入联系单编号', trigger: 'blur' }],
     title: [{ required: true, message: '请输入联系主题', trigger: 'blur' }],
     receivedDate: [{ required: true, message: '请选择收单日期', trigger: 'change' }],
   }
@@ -224,27 +289,16 @@ export class ContactForm {
     return this.record.title
   }
 
-  get status() {
-    return this.record.status
-  }
-
   get isChildRow() {
     return (this.record.sortOrder ?? 0) > 0
   }
 
   canEdit() {
-    return this.record.status !== ContactForm.STATUS.CANCELLED
+    return true
   }
 
   canCancel() {
-    return (
-      this.record.status === ContactForm.STATUS.PENDING ||
-      this.record.status === ContactForm.STATUS.PROCESSING
-    )
-  }
-
-  cancel() {
-    this.record.status = ContactForm.STATUS.CANCELLED
+    return true
   }
 
   update(form: ContactFormData, attachmentList: UploadUserFile[]) {
@@ -299,6 +353,8 @@ export class ContactForm {
       receivedDate: ContactForm.formatDate(),
       urgency: '普通',
       content: '',
+      linkage: 'independent',
+      parentId: '',
       attachmentList: [],
       primaryPdfList: [],
       primaryPdfVersions: [],
@@ -307,6 +363,8 @@ export class ContactForm {
 
   static createEmptyChildForm(parent?: ContactRecord): ChildContactFormData {
     return {
+      id: '',
+      contactType: 'contact',
       title: '',
       receivedDate: ContactForm.formatDate(),
       urgency: parent?.urgency || '普通',
@@ -330,6 +388,12 @@ export class ContactForm {
       receivedDate: record.receivedDate,
       urgency: record.urgency,
       content: record.content || '',
+      linkage:
+        record.parentId || (record.relationType != null && record.relationType !== 'primary')
+          ? 'append'
+          : 'independent',
+      parentId: record.parentId || '',
+      relationType: record.relationType,
       attachmentList: ContactForm.toUploadFileList(record.attachments),
       primaryPdfList: ContactForm.toUploadFileList(record.primaryPdf ? [record.primaryPdf] : []),
       primaryPdfVersions: [...(record.primaryPdfVersions || [])],
@@ -337,32 +401,39 @@ export class ContactForm {
   }
 
   static sortForDisplay(records: ContactRecord[]) {
-    const familySortDate = (record: ContactRecord) =>
+    // 倒序排序需要体现“最近一次活动”的单据组靠前：
+    // 无论追加单类型（补充/变更/跟进/取消），都按同一 rootId 组内最后创建时间作为排序依据。
+    const familySortTime = (record: ContactRecord) => (record.createdAt || '').trim()
+    const fallbackFamilySortTime = (record: ContactRecord) =>
       ContactForm.toDateOnly(record.familyMaxReceivedDate || record.receivedDate)
 
-    const rootDateMap = new Map<string, string>()
+    const rootTimeMap = new Map<string, string>()
     for (const record of records) {
       const rootId = record.rootId || record.id
-      const recordDate = familySortDate(record)
-      const prevDate = rootDateMap.get(rootId)
-      if (!prevDate || recordDate > prevDate) {
-        rootDateMap.set(rootId, recordDate)
+      const recordTime = familySortTime(record) || fallbackFamilySortTime(record)
+      const prevTime = rootTimeMap.get(rootId)
+      if (!prevTime || recordTime > prevTime) {
+        rootTimeMap.set(rootId, recordTime)
       }
     }
 
     return [...records].sort((a, b) => {
       const rootA = a.rootId || a.id
       const rootB = b.rootId || b.id
-      const dateA = rootDateMap.get(rootA) ?? familySortDate(a)
-      const dateB = rootDateMap.get(rootB) ?? familySortDate(b)
-      if (dateA !== dateB) return dateB.localeCompare(dateA)
+      // 同一家族内：主单在前，补充/变更/跟进/取消按 sortOrder 依次排列
+      if (rootA === rootB) {
+        return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      }
+
+      const timeA = rootTimeMap.get(rootA) ?? (familySortTime(a) || fallbackFamilySortTime(a))
+      const timeB = rootTimeMap.get(rootB) ?? (familySortTime(b) || fallbackFamilySortTime(b))
+      if (timeA !== timeB) return timeB.localeCompare(timeA)
 
       const projectNoA = ContactForm.maxProjectNoForSort(a.projectNos)
       const projectNoB = ContactForm.maxProjectNoForSort(b.projectNos)
       if (projectNoA !== projectNoB) return projectNoB.localeCompare(projectNoA, 'zh-CN')
 
-      if (rootA !== rootB) return rootA.localeCompare(rootB)
-      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+      return rootA.localeCompare(rootB)
     })
   }
 
@@ -371,18 +442,6 @@ export class ContactForm {
     groupBy: ContactGroupBy,
   ): ContactRecordGroup[] {
     if (!groupBy) return []
-
-    if (groupBy === 'status') {
-      const statusOrder = ContactForm.STATUS_OPTIONS.filter((item) => item.value).map(
-        (item) => item.value,
-      )
-      return ContactForm.groupByField(
-        records,
-        (record) => record.status,
-        statusOrder,
-        (key) => ContactForm.STATUS_MAP[key as ContactStatus]?.label ?? key,
-      )
-    }
 
     return ContactForm.groupByField(
       records,
@@ -418,18 +477,23 @@ export class ContactForm {
       .filter((group) => group.members.length > 0)
   }
 
-  static filter(records: ContactRecord[], { keyword = '', status = '' }: ContactFilterParams = {}) {
+  static filter(records: ContactRecord[], { keyword = '' }: ContactFilterParams = {}) {
     const normalizedKeyword = keyword.trim().toLowerCase()
 
     return records.filter((item) => {
-      const matchKeyword =
+      const displayId = ContactForm.formatDisplayId(item.id, item.projectNos?.[0])
+      return (
         !normalizedKeyword ||
         item.id.toLowerCase().includes(normalizedKeyword) ||
+        displayId.toLowerCase().includes(normalizedKeyword) ||
         item.title.toLowerCase().includes(normalizedKeyword) ||
-        item.projectNos?.some((no) => no.toLowerCase().includes(normalizedKeyword)) ||
+        item.projectNos?.some((no) => {
+          const normalizedNo = no.toLowerCase()
+          const baseNo = ContactForm.parseBaseProjectNo(no).toLowerCase()
+          return normalizedNo.includes(normalizedKeyword) || baseNo.includes(normalizedKeyword)
+        }) ||
         item.receivedDate.toLowerCase().includes(normalizedKeyword)
-      const matchStatus = !status || item.status === status
-      return matchKeyword && matchStatus
+      )
     })
   }
 
@@ -462,58 +526,108 @@ export class ContactForm {
     return type === 'application/pdf' || name.toLowerCase().endsWith('.pdf')
   }
 
+  static extractFilesFromDrop(dataTransfer: DataTransfer) {
+    return [...dataTransfer.files]
+  }
+
   static extractPdfFilesFromDrop(dataTransfer: DataTransfer) {
-    return [...dataTransfer.files].filter((file) => ContactForm.isPdfFile(file))
+    return ContactForm.extractFilesFromDrop(dataTransfer).filter((file) => ContactForm.isPdfFile(file))
   }
 
   static async fileToUploadPayload(file: File): Promise<PdfUploadPayload> {
-    const md5 = await computeFileMd5(file)
-    const check = await checkContactPdfMd5(md5)
-    if (check.exists) {
+    const readable = await snapshotFile(file)
+    return withFileReadGuard(readable.name, async () => {
+      const md5 = await computeFileMd5(readable)
+      const check = await checkContactPdfMd5(md5)
+      if (check.exists) {
+        return {
+          fileName: readable.name,
+          md5,
+        }
+      }
+
+      const buffer = await readable.arrayBuffer()
+      const bytes = new Uint8Array(buffer)
+      let binary = ''
+      for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i]!)
+      }
       return {
-        fileName: file.name,
+        fileName: readable.name,
+        content: btoa(binary),
         md5,
       }
-    }
-
-    const buffer = await file.arrayBuffer()
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    for (let i = 0; i < bytes.length; i += 1) {
-      binary += String.fromCharCode(bytes[i]!)
-    }
-    return {
-      fileName: file.name,
-      content: btoa(binary),
-      md5,
-    }
+    })
   }
 
   static async filesToUploadPayload(files: File[]): Promise<PdfUploadPayload[]> {
     return Promise.all(files.map((file) => ContactForm.fileToUploadPayload(file)))
   }
 
-  static filesToAttachmentList(files: File[]): UploadUserFile[] {
-    return files.map((file, index) => {
-      const uid = Date.now() + index
-      const raw = Object.assign(file, { uid }) as UploadRawFile
-      return {
-        uid,
-        name: file.name,
-        raw,
-        url: URL.createObjectURL(file),
-        status: 'success',
-      }
-    })
+  static async filesToAttachmentList(files: File[]): Promise<UploadUserFile[]> {
+    return Promise.all(
+      files.map(async (file, index) => {
+        const uid = Date.now() + index
+        const snapped = await snapshotFile(file)
+        const raw = Object.assign(snapped, { uid }) as UploadRawFile
+        return {
+          uid,
+          name: snapped.name,
+          raw,
+          url: URL.createObjectURL(snapped),
+          status: 'success' as const,
+        }
+      }),
+    )
   }
 
-  static toUploadFileList(attachments: ContactAttachment[] = []): UploadUserFile[] {
+  static async snapshotUploadFiles(fileList: UploadUserFile[]): Promise<UploadUserFile[]> {
+    return Promise.all(
+      fileList.map(async (item) => {
+        if (!(item.raw instanceof File)) return item
+        const snapped = await snapshotFile(item.raw)
+        const raw = Object.assign(snapped, { uid: item.uid }) as UploadRawFile
+        return {
+          ...item,
+          name: snapped.name,
+          raw,
+          url: item.url || URL.createObjectURL(snapped),
+        }
+      }),
+    )
+  }
+
+  static toUploadFileList(attachments: ContactAttachment[] = []): AttachmentUploadFile[] {
     return attachments.map((item, index) => ({
-      uid: index,
+      uid: -(index + 1),
       name: item.name,
       url: item.url,
       status: 'success',
+      attachmentId: item.id,
     }))
+  }
+
+  static getAttachmentIdFromUploadFile(file: UploadUserFile): string | undefined {
+    return (file as AttachmentUploadFile).attachmentId
+  }
+
+  static getRemainingAttachmentIds(fileList: UploadUserFile[]): string[] {
+    return fileList
+      .map((item) => ContactForm.getAttachmentIdFromUploadFile(item))
+      .filter((id): id is string => Boolean(id))
+  }
+
+  static getRemovedAttachmentIds(
+    originalIds: string[],
+    remainingIds: string[],
+    explicitlyRemovedIds: Iterable<string> = [],
+  ): string[] {
+    const removedFromDiff = originalIds.filter((id) => !remainingIds.includes(id))
+    return [...new Set([...explicitlyRemovedIds, ...removedFromDiff])]
+  }
+
+  static getNewAttachmentFiles(fileList: UploadUserFile[]): UploadUserFile[] {
+    return fileList.filter((item) => item.raw instanceof File)
   }
 
   static normalizeAttachments(fileList: UploadUserFile[]): ContactAttachment[] {
@@ -525,7 +639,8 @@ export class ContactForm {
   }
 
   static async uploadFilesFromList(fileList: UploadUserFile[]): Promise<PdfUploadPayload[]> {
-    const files = fileList
+    const snapshotted = await ContactForm.snapshotUploadFiles(fileList)
+    const files = snapshotted
       .map((item) => item.raw)
       .filter((raw): raw is UploadRawFile => raw instanceof File)
     return ContactForm.filesToUploadPayload(files)
@@ -539,10 +654,17 @@ export class ContactForm {
     const normalizedKeyword = keyword.trim().toLowerCase()
     if (!normalizedKeyword) return true
 
+    const displayId = ContactForm.formatDisplayId(record.id, record.projectNos?.[0])
+
     return (
       record.id.toLowerCase().includes(normalizedKeyword) ||
+      displayId.toLowerCase().includes(normalizedKeyword) ||
       record.title.toLowerCase().includes(normalizedKeyword) ||
-      record.projectNos?.some((no) => no.toLowerCase().includes(normalizedKeyword))
+      record.projectNos?.some((no) => {
+        const normalizedNo = no.toLowerCase()
+        const baseNo = ContactForm.parseBaseProjectNo(no).toLowerCase()
+        return normalizedNo.includes(normalizedKeyword) || baseNo.includes(normalizedKeyword)
+      })
     )
   }
 

@@ -8,6 +8,7 @@ defineProps<{
   showTeam?: boolean
   showNationality?: boolean
   showDormitory?: boolean
+  showWorkshop?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -49,7 +50,13 @@ function getPositionTagType(position: string) {
         <span v-else>{{ row.position || '-' }}</span>
       </template>
     </el-table-column>
-    <el-table-column prop="workshop" label="车间/科室" width="130" show-overflow-tooltip />
+    <el-table-column
+      v-if="showWorkshop !== false"
+      prop="workshop"
+      label="车间/科室"
+      width="130"
+      show-overflow-tooltip
+    />
     <el-table-column
       v-if="showTeam !== false"
       prop="team"

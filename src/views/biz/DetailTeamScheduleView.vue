@@ -14,6 +14,10 @@ import {
   ProjectForm,
 } from '@/models/biz/project'
 import type { ProjectRecord } from '@/models/biz/project'
+import { canEditPage } from '@/utils/permission'
+
+const canEditSchedule = computed(() => canEditPage('detail-team-schedule'))
+const canEditProject = computed(() => canEditPage('project'))
 
 const DRAG_MIME = 'application/x-steeltech-project'
 const MEMBER_DRAG_MIME = 'application/x-steeltech-detail-member'
@@ -100,6 +104,7 @@ function handleProjectDragStart(
   projectNo: string,
   sourcePersonnelId?: string,
 ) {
+  if (!canEditProject.value) return
   const payload: DragProjectPayload = { projectNo, sourcePersonnelId }
   event.dataTransfer?.setData(DRAG_MIME, encodeDragPayload(payload))
   event.dataTransfer?.setData('text/plain', projectNo)
@@ -125,6 +130,7 @@ function clearMemberReorderDragState() {
 }
 
 function handleMemberCardDragStart(event: DragEvent, personnelId: string) {
+  if (!canEditSchedule.value) return
   event.stopPropagation()
   memberReorderSourceId = personnelId
   event.dataTransfer?.setData(MEMBER_DRAG_MIME, personnelId)
@@ -219,9 +225,10 @@ async function loadData() {
   }
 }
 
-function replaceProject(record: ProjectRecord) {
+function replaceProject(record: ProjectRecord, previousProjectNo?: string) {
+  const lookupNo = previousProjectNo ?? record.projectNo
   const index = allProjects.value.findIndex(
-    (item) => item.projectNo === record.projectNo,
+    (item) => item.projectNo === lookupNo,
   )
   if (index >= 0) {
     allProjects.value[index] = record
@@ -285,6 +292,7 @@ async function handleMemberDrop(
     ''
 
   if (reorderSourceId) {
+    if (!canEditSchedule.value) return
     dragOverMemberReorderId.value = null
     memberReorderSourceId = null
     draggingMemberId.value = null
@@ -296,13 +304,20 @@ async function handleMemberDrop(
   dragOverMemberId.value = null
 
   const payload = decodeDragPayload(event)
-  if (!payload) return
+  if (!payload || !canEditProject.value) return
 
   await assignProjectToMember(payload, targetPersonnelId, targetPersonnelName)
 }
 
-function handleProjectSaved(record: ProjectRecord) {
-  replaceProject(record)
+function handleProjectSaved(record: ProjectRecord, previousProjectNo?: string) {
+  replaceProject(record, previousProjectNo)
+}
+
+function handleProjectSplit({ original, clone }: { original: ProjectRecord; clone: ProjectRecord }) {
+  replaceProject(original, editingProject.value?.projectNo)
+  if (!allProjects.value.some((item) => item.projectNo === clone.projectNo)) {
+    allProjects.value.push(clone)
+  }
 }
 
 onMounted(() => {
@@ -353,7 +368,7 @@ onMounted(() => {
               :class="{
                 'is-dragging': draggingProjectNo === project.projectNo,
               }"
-              draggable="true"
+              :draggable="canEditProject"
               @dragstart="handleProjectDragStart($event, project.projectNo)"
               @dragend="handleProjectDragEnd"
             >
@@ -364,6 +379,7 @@ onMounted(() => {
                     {{ getStatusMeta(project.status).label }}
                   </el-tag>
                   <el-button
+                    v-if="canEditProject"
                     type="primary"
                     link
                     size="small"
@@ -412,7 +428,7 @@ onMounted(() => {
             >
               <header
                 class="member-card__header"
-                draggable="true"
+                :draggable="canEditSchedule"
                 title="拖拽调整人员顺序"
                 @dragstart.stop="handleMemberCardDragStart($event, member.personnelId)"
                 @dragend.stop="handleMemberCardDragEnd"
@@ -437,7 +453,7 @@ onMounted(() => {
                   :class="{
                     'is-dragging': draggingProjectNo === project.projectNo,
                   }"
-                  draggable="true"
+                  :draggable="canEditProject"
                   @dragstart="
                     handleProjectDragStart($event, project.projectNo, member.personnelId)
                   "
@@ -449,6 +465,7 @@ onMounted(() => {
                   </div>
                   <div class="member-project-item__actions">
                     <el-button
+                      v-if="canEditProject"
                       type="primary"
                       link
                       size="small"
@@ -475,6 +492,7 @@ onMounted(() => {
     v-model:visible="editDialogVisible"
     :record="editingProject"
     @saved="handleProjectSaved"
+    @split="handleProjectSplit"
   />
 </template>
 

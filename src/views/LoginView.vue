@@ -45,19 +45,23 @@ async function handleLogin() {
     }
     setToken(res.token)
     setUser({ ...res.user, password: form.password })
+
+    const redirect =
+      typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+        ? route.query.redirect
+        : '/home'
+
     ElMessage.success('登录成功')
+    try {
+      await router.replace(redirect)
+    } catch {
+      window.location.hash = `#${redirect}`
+    }
   } catch {
     ElMessage.error('登录失败，请检查工号和密码')
-    return
   } finally {
     loading.value = false
   }
-
-  const redirect =
-    typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
-      ? route.query.redirect
-      : '/home'
-  await router.replace(redirect)
 }
 </script>
 

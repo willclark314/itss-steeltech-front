@@ -8,8 +8,11 @@ import LocalWorkPathCell from '@/components/biz/LocalWorkPathCell.vue'
 import ProjectDateEditCell from '@/components/biz/ProjectDateEditCell.vue'
 import ProjectNatureCell from '@/components/biz/ProjectNatureCell.vue'
 import ProjectPersonnelEditCell from '@/components/biz/ProjectPersonnelEditCell.vue'
+import ProjectPersonnelColumnHeader from '@/components/biz/ProjectPersonnelColumnHeader.vue'
+import ProjectFlowStatusColumnHeader from '@/components/biz/ProjectFlowStatusColumnHeader.vue'
+import ProjectNatureColumnHeader from '@/components/biz/ProjectNatureColumnHeader.vue'
 import ProjectFlowStatusEditCell from '@/components/biz/ProjectFlowStatusEditCell.vue'
-import { ProjectForm, DetailWorkflowForm } from '@/models/biz/project'
+import { ProjectForm } from '@/models/biz/project'
 import { ContactForm } from '@/models/biz/contact'
 import { BIZ_ROUTES, buildContactRouteQuery } from '@/models/biz/navigation'
 import type { PersonnelRecord } from '@/models/personnel'
@@ -32,6 +35,10 @@ const props = withDefaults(
   },
 )
 
+const assignedPersonnelId = defineModel<string>('assignedPersonnelId', { default: '' })
+const flowStatusFilter = defineModel<string[]>('flowStatusFilter', { default: () => [] })
+const natureFilter = defineModel<string[]>('natureFilter', { default: () => [] })
+
 const tableRef = ref()
 defineExpose({ tableRef })
 
@@ -47,6 +54,7 @@ const emit = defineEmits<{
   statusUpdated: [record: ProjectRecord]
   dateUpdated: [record: ProjectRecord]
   pathUpdated: [projectNo: string, localWorkPath: string, designWorkPath: string, detailWorkPath: string]
+  columnFilterChange: []
 }>()
 
 const router = useRouter()
@@ -88,18 +96,6 @@ function handleContactTagClick(link: ProjectContactLink) {
   goToContactForm(link.contactFormId)
 }
 
-function isModelWeightApplicable(row: ProjectRecord) {
-  return DetailWorkflowForm.needsDetailWorkflow(row.natures) && Boolean(row.detailWorkflow)
-}
-
-function getModelWeightDisplay(row: ProjectRecord) {
-  return DetailWorkflowForm.formatModelWeightDisplay(row.detailWorkflow?.modelWeightTons)
-}
-
-function getModelWeightTooltip(row: ProjectRecord) {
-  return DetailWorkflowForm.getModelWeightAuditTooltip(row.detailWorkflow)
-}
-
 function isDateSaving(projectNo: string, field: ProjectDateField) {
   return savingDateKey.value === `${projectNo}:${field}`
 }
@@ -123,7 +119,7 @@ async function handleDateChange(row: ProjectRecord, field: ProjectDateField, val
 
 <template>
   <el-table ref="tableRef" v-loading="loading" :data="data" stripe class="biz-data-table" :row-class-name="getRowClassName" :height="tableHeight" style="min-width: 1000px">
-    <el-table-column label="联系单编号" width="220" class-name="tag-column contact-form-column">
+    <el-table-column label="联系单编号" width="150" class-name="tag-column contact-form-column">
       <template #default="{ row }">
         <template v-if="getContactLinks(toProjectRecord(row)).length">
           <el-tooltip :content="getContactLinkSummary(getContactLinks(toProjectRecord(row)), toProjectRecord(row))" placement="top" :show-after="200"
@@ -139,27 +135,38 @@ async function handleDateChange(row: ProjectRecord, field: ProjectDateField, val
         <span v-else class="text-muted">-</span>
       </template>
     </el-table-column>
-    <el-table-column prop="receivedDate" label="收单时间" width="100" align="center" header-align="center" class-name="date-column" />
-    <el-table-column label="项目号" width="110" class-name="text-column">
+    <el-table-column label="项目号" width="115" class-name="text-column">
       <template #default="{ row }">
-        {{ ProjectForm.getDisplayProjectNo(toProjectRecord(row)) }}
+        <span
+          class="project-no-text"
+          :class="{ 'is-urgent': ProjectForm.hasUrgentContact(toProjectRecord(row)) }"
+        >
+          {{ ProjectForm.getDisplayProjectNo(toProjectRecord(row)) }}
+        </span>
       </template>
     </el-table-column>
-    <el-table-column prop="name" label="项目名称" min-width="180" show-overflow-tooltip />
-
-    <el-table-column v-if="showNature" label="项目性质" width="100" class-name="tag-column nature-column">
+    <el-table-column prop="name" label="项目名称" min-width="350" show-overflow-tooltip />
+    <el-table-column v-if="showNature" width="120" class-name="tag-column nature-column">
+      <template #header>
+        <ProjectNatureColumnHeader v-model="natureFilter" @change="emit('columnFilterChange')" />
+      </template>
       <template #default="{ row }">
         <ProjectNatureCell :project="toProjectRecord(row)" @updated="(record) => emit('natureUpdated', record)" />
       </template>
     </el-table-column>
     <el-table-column
       v-if="showPersonnel"
-      label="分配人员"
-      min-width="120"
+      width="120"
       align="left"
       header-align="left"
       class-name="tag-column personnel-column"
     >
+      <template #header>
+        <ProjectPersonnelColumnHeader
+          v-model:assigned-personnel-id="assignedPersonnelId"
+          :personnel-options="personnelOptions || []"
+        />
+      </template>
       <template #default="{ row }">
         <ProjectPersonnelEditCell
           :project="toProjectRecord(row)"
@@ -168,12 +175,12 @@ async function handleDateChange(row: ProjectRecord, field: ProjectDateField, val
         />
       </template>
     </el-table-column>
-    <el-table-column label="流程状态" min-width="150" class-name="tag-column flow-status-column">
+    <el-table-column width="270" class-name="tag-column flow-status-column">
+      <template #header>
+        <ProjectFlowStatusColumnHeader v-model="flowStatusFilter" @change="emit('columnFilterChange')" />
+      </template>
       <template #default="{ row }">
-        <ProjectFlowStatusEditCell
-          :project="toProjectRecord(row)"
-          @updated="(record) => emit('statusUpdated', record)"
-        />
+        <ProjectFlowStatusEditCell :project="toProjectRecord(row)" @updated="(record) => emit('statusUpdated', record)" />
       </template>
     </el-table-column>
     <el-table-column label="实际开始" width="100" align="center" header-align="center" class-name="date-column">
@@ -188,20 +195,7 @@ async function handleDateChange(row: ProjectRecord, field: ProjectDateField, val
           @change="(value) => handleDateChange(toProjectRecord(row), 'actualEndDate', value)" />
       </template>
     </el-table-column>
-    <el-table-column label="模型重(吨)" width="96" align="center" header-align="center" class-name="model-weight-column">
-      <template #default="{ row }">
-        <template v-if="isModelWeightApplicable(toProjectRecord(row))">
-          <el-tooltip :content="getModelWeightTooltip(toProjectRecord(row))" placement="top" :show-after="200" :disabled="!getModelWeightTooltip(toProjectRecord(row))">
-            <span class="model-weight-text" :class="{ 'text-muted': getModelWeightDisplay(toProjectRecord(row)) === '-' }">
-              {{ getModelWeightDisplay(toProjectRecord(row)) }}
-            </span>
-          </el-tooltip>
-        </template>
-        <span v-else class="text-muted">-</span>
-      </template>
-    </el-table-column>
-
-    <el-table-column label="本地路径" width="88" align="center" fixed="right" class-name="local-path-column">
+    <el-table-column label="本地路径" width="80" align="center" fixed="right" class-name="local-path-column">
       <template #default="{ row }">
         <LocalWorkPathCell :project="toProjectRecord(row)"
           @path-updated="(projectNo, localWorkPath, designWorkPath, detailWorkPath) => emit('pathUpdated', projectNo, localWorkPath, designWorkPath, detailWorkPath)" />
@@ -215,11 +209,3 @@ async function handleDateChange(row: ProjectRecord, field: ProjectDateField, val
     </el-table-column>
   </el-table>
 </template>
-
-<style scoped>
-.model-weight-text {
-  display: inline-block;
-  font-size: 13px;
-  line-height: var(--biz-table-row-height, 35px);
-}
-</style>

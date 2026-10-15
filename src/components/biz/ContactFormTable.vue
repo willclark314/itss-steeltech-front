@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import '@/styles/biz-data-table.css'
-import { reactive, ref } from 'vue'
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { ContactForm } from '@/models/biz/contact'
 import { ProjectForm } from '@/models/biz/project'
+import { updateContact } from '@/api/contacts'
 import type { ContactAttachment, ContactRecord } from '@/models/biz/contact'
 import type { ProjectLink } from '@/models/biz/contact'
+import AttachmentIconsCell from '@/components/biz/AttachmentIconsCell.vue'
 import OverflowTooltip from '@/components/biz/OverflowTooltip.vue'
-import TagCell from '@/components/biz/TagCell.vue'
-import MyContactStatusCell from '@/components/portal/MyContactStatusCell.vue'
+import ProjectDateEditCell from '@/components/biz/ProjectDateEditCell.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -24,6 +26,7 @@ const props = withDefaults(
 )
 
 const attachmentDropTargetId = defineModel<string>('attachmentDropTargetId', { default: '' })
+const primaryPdfDropTargetId = defineModel<string>('primaryPdfDropTargetId', { default: '' })
 
 const emit = defineEmits<{
   edit: [row: ContactRecord]
@@ -32,22 +35,17 @@ const emit = defineEmits<{
   delete: [row: ContactRecord]
   'project-no-click': [projectNo: string, row: ContactRecord]
   'attachment-drop': [row: ContactRecord, files: File[]]
-  'status-updated': [contact: ContactRecord]
+  'primary-pdf-drop': [row: ContactRecord, file: File]
+  'primary-pdf-invalid-drop': [row: ContactRecord]
+  'received-date-updated': [contact: ContactRecord]
 }>()
 
 const tableRef = ref()
-const savingStatusKey = ref('')
+const savingReceivedDateKey = ref('')
 defineExpose({ tableRef })
 
 const relationTypeMap = ContactForm.RELATION_TYPE_MAP
 const projectSourceMap = ContactForm.PROJECT_SOURCE_MAP
-
-const attachmentTooltip = reactive({
-  visible: false,
-  text: '',
-  top: 0,
-  left: 0,
-})
 
 function getProjectLinks(row: ContactRecord): ProjectLink[] {
   return ContactForm.getProjectLinks(row)
@@ -68,22 +66,6 @@ function openAttachment(file: ContactAttachment) {
   }
 }
 
-function showAttachmentHint(event: MouseEvent, name: string) {
-  const cell = (event.currentTarget as HTMLElement | null)?.closest('.attachment-cell')
-  if (!cell) return
-
-  const rect = cell.getBoundingClientRect()
-  attachmentTooltip.text = name
-  attachmentTooltip.top = rect.top + rect.height / 2
-  attachmentTooltip.left = rect.left
-  attachmentTooltip.visible = true
-}
-
-function hideAttachmentHint() {
-  attachmentTooltip.visible = false
-  attachmentTooltip.text = ''
-}
-
 function toContactRecord(row: unknown): ContactRecord {
   return row as ContactRecord
 }
@@ -94,6 +76,10 @@ function canEditRow(row: unknown) {
 
 function canCancelRow(row: unknown) {
   return ContactForm.wrap(toContactRecord(row)).canCancel()
+}
+
+function isReceivedDateSaving(contactId: string) {
+  return savingReceivedDateKey.value === contactId
 }
 
 function isMissingProjectNo(projectNo: string) {
@@ -113,10 +99,46 @@ function hasFileDrag(event: DragEvent) {
 }
 
 function handleAttachmentDragOver(event: DragEvent, row: ContactRecord) {
+  if (!hasFileDrag(event)) return
   event.preventDefault()
   event.stopPropagation()
-  if (!hasFileDrag(event)) return
+  event.dataTransfer!.dropEffect = 'copy'
+  primaryPdfDropTargetId.value = ''
   attachmentDropTargetId.value = row.id
+}
+
+function handlePrimaryPdfDragOver(event: DragEvent, row: ContactRecord) {
+  if (!hasFileDrag(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer!.dropEffect = 'copy'
+  attachmentDropTargetId.value = ''
+  primaryPdfDropTargetId.value = row.id
+}
+
+function handlePrimaryPdfDragLeave(event: DragEvent, row: ContactRecord) {
+  const current = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (related && current?.contains(related)) return
+  if (primaryPdfDropTargetId.value === row.id) {
+    primaryPdfDropTargetId.value = ''
+  }
+}
+
+function handlePrimaryPdfDrop(event: DragEvent, row: ContactRecord) {
+  event.preventDefault()
+  primaryPdfDropTargetId.value = ''
+
+  const allFiles = ContactForm.extractFilesFromDrop(event.dataTransfer!)
+  if (!allFiles.length) return
+
+  event.stopPropagation()
+  const pdfFiles = ContactForm.extractPdfFilesFromDrop(event.dataTransfer!)
+  if (!pdfFiles.length) {
+    emit('primary-pdf-invalid-drop', row)
+    return
+  }
+  emit('primary-pdf-drop', row, pdfFiles[0]!)
 }
 
 function handleAttachmentDragLeave(event: DragEvent, row: ContactRecord) {
@@ -130,26 +152,41 @@ function handleAttachmentDragLeave(event: DragEvent, row: ContactRecord) {
 
 function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
   event.preventDefault()
-  event.stopPropagation()
   attachmentDropTargetId.value = ''
 
-  const pdfFiles = ContactForm.extractPdfFilesFromDrop(event.dataTransfer!)
-  if (!pdfFiles.length) return
+  const files = ContactForm.extractFilesFromDrop(event.dataTransfer!)
+  if (!files.length) return
 
-  emit('attachment-drop', row, pdfFiles)
+  event.stopPropagation()
+  emit('attachment-drop', row, files)
+}
+
+async function handleReceivedDateChange(row: ContactRecord, dateOnly: string) {
+  const contactId = row.id
+  const savingKey = contactId
+  savingReceivedDateKey.value = savingKey
+
+  try {
+    if (!dateOnly) {
+      ElMessage.warning('请选择收单日期')
+      return
+    }
+
+    const updated = await updateContact(contactId, { receivedDate: dateOnly })
+    emit('received-date-updated', updated)
+    ElMessage.success('收单时间已保存')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '保存收单时间失败')
+  } finally {
+    if (savingReceivedDateKey.value === savingKey) {
+      savingReceivedDateKey.value = ''
+    }
+  }
 }
 </script>
 
 <template>
-  <el-table
-    ref="tableRef"
-    v-loading="loading"
-    :data="data"
-    stripe
-    class="biz-data-table"
-    :row-class-name="getRowClassName"
-    :height="tableHeight"
-  >
+  <el-table ref="tableRef" v-loading="loading" :data="data" stripe class="biz-data-table" :row-class-name="getRowClassName" :height="tableHeight">
     <el-table-column label="联系单号" width="220" class-name="tag-column contact-id-column">
       <template #default="{ row }">
         <div class="contact-id-cell" :class="{ 'is-child': (row.sortOrder ?? 0) > 0 }">
@@ -158,55 +195,36 @@ function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
               {{ ContactForm.formatDisplayId(row.id, row.projectNos?.[0]) }}
             </el-tag>
           </OverflowTooltip>
-          <el-tag
-            v-if="getRelationMeta(toContactRecord(row)).label !== '主单'"
-            size="small"
-            class="cell-tag relation-tag"
-            :type="getRelationMeta(toContactRecord(row)).type"
-          >
+          <el-tag v-if="getRelationMeta(toContactRecord(row)).label !== '主单'" size="small" class="cell-tag relation-tag" :type="getRelationMeta(toContactRecord(row)).type">
             {{ getRelationMeta(toContactRecord(row)).label }}
           </el-tag>
-          <span
-            v-if="(row.childCount ?? 0) > 0 && (row.sortOrder ?? 0) === 0"
-            class="child-count"
-          >
+          <span v-if="(row.childCount ?? 0) > 0 && (row.sortOrder ?? 0) === 0" class="child-count">
             +{{ row.childCount }}
           </span>
         </div>
       </template>
     </el-table-column>
-    <el-table-column prop="title" label="联系主题" min-width="160" show-overflow-tooltip />
-    <el-table-column label="标签" width="140" class-name="tag-column">
+    <el-table-column prop="receivedDate" label="收单时间" width="110" align="center" header-align="center" class-name="date-column">
       <template #default="{ row }">
-        <TagCell :tags="toContactRecord(row).tags" />
+        <ProjectDateEditCell :model-value="ContactForm.toDateOnly(row.receivedDate)" :loading="isReceivedDateSaving(row.id)"
+          @change="(value) => handleReceivedDateChange(toContactRecord(row), value)" />
       </template>
     </el-table-column>
-    <el-table-column label="项目号" min-width="160" class-name="tag-column project-no-column">
+    <el-table-column prop="title" label="联系主题" min-width="160" show-overflow-tooltip />
+    <el-table-column label="项目号" width="160" class-name="tag-column project-no-column">
       <template #default="{ row }">
         <el-tooltip v-if="row.projectNos?.length" placement="top" :show-after="200" :enterable="true">
           <template #content>
             <div class="project-no-tooltip">
-              <div
-                v-for="no in row.projectNos"
-                :key="no"
-                class="project-no-tooltip-item"
-                :class="{ 'is-missing': isMissingProjectNo(no) }"
-                @click="emit('project-no-click', no, toContactRecord(row))"
-              >
+              <div v-for="no in row.projectNos" :key="no" class="project-no-tooltip-item" :class="{ 'is-missing': isMissingProjectNo(no) }"
+                @click="emit('project-no-click', no, toContactRecord(row))">
                 {{ ProjectForm.formatDisplayProjectNo(no) }}
               </div>
             </div>
           </template>
           <div class="project-no-tag-list">
-            <el-tag
-              v-for="link in getProjectLinks(toContactRecord(row))"
-              :key="link.projectNo"
-              :type="isMissingProjectNo(link.projectNo) ? 'warning' : getProjectTagType(link)"
-              effect="plain"
-              size="small"
-              class="cell-tag cell-tag--clickable"
-              @click="emit('project-no-click', link.projectNo, toContactRecord(row))"
-            >
+            <el-tag v-for="link in getProjectLinks(toContactRecord(row))" :key="link.projectNo" :type="isMissingProjectNo(link.projectNo) ? 'warning' : getProjectTagType(link)"
+              effect="plain" size="small" class="cell-tag cell-tag--clickable" @click="emit('project-no-click', link.projectNo, toContactRecord(row))">
               {{ ProjectForm.formatDisplayProjectNo(link.projectNo) }}
             </el-tag>
           </div>
@@ -214,142 +232,62 @@ function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
         <span v-else class="text-muted">-</span>
       </template>
     </el-table-column>
-    <el-table-column
-      prop="receivedDate"
-      label="收单时间"
-      width="110"
-      align="center"
-      header-align="center"
-      class-name="date-column"
-    />
+
     <el-table-column prop="urgency" label="紧急程度" width="100" class-name="tag-column">
       <template #default="{ row }">
-        <el-tag
-          :type="row.urgency === '紧急' ? 'danger' : 'info'"
-          size="small"
-          class="cell-tag"
-        >
+        <el-tag :type="row.urgency === '紧急' ? 'danger' : 'info'" size="small" class="cell-tag">
           {{ row.urgency }}
         </el-tag>
       </template>
     </el-table-column>
-    <el-table-column prop="status" label="状态" width="100" class-name="tag-column status-column">
-      <template #default="{ row }">
-        <MyContactStatusCell
-          :contact="toContactRecord(row)"
-          :loading-key="savingStatusKey"
-          @updated="emit('status-updated', $event)"
-          @saving="savingStatusKey = $event"
-          @saved="savingStatusKey = ''"
-        />
-      </template>
-    </el-table-column>
     <el-table-column label="正文" width="72" align="center" class-name="attachment-column">
       <template #default="{ row }">
-        <span
-          v-if="row.primaryPdf?.url"
-          class="pdf-icon-wrap is-clickable"
-          @click="openAttachment(row.primaryPdf)"
-        >
-          <el-icon class="pdf-icon"><Document /></el-icon>
-        </span>
-        <span v-else class="text-muted">-</span>
+        <div class="attachment-drop-zone" @dragenter="handlePrimaryPdfDragOver($event, toContactRecord(row))" @dragover="handlePrimaryPdfDragOver($event, toContactRecord(row))"
+          @dragleave="handlePrimaryPdfDragLeave($event, toContactRecord(row))" @drop="handlePrimaryPdfDrop($event, toContactRecord(row))">
+          <span v-if="row.primaryPdf?.url" class="pdf-icon-wrap is-clickable" @click="openAttachment(row.primaryPdf)">
+            <el-icon class="pdf-icon">
+              <Document />
+            </el-icon>
+          </span>
+          <span v-else class="text-muted">-</span>
+          <div v-if="primaryPdfDropTargetId === row.id" class="attachment-drop-overlay">
+            <el-icon :size="20">
+              <Upload />
+            </el-icon>
+            <span>松手上传正文</span>
+          </div>
+        </div>
       </template>
     </el-table-column>
-    <el-table-column label="附件" min-width="88" class-name="attachment-column">
+    <el-table-column label="附件" width="72" class-name="attachment-column">
       <template #default="{ row }">
-        <div
-          class="attachment-drop-zone"
-          @dragenter="handleAttachmentDragOver($event, toContactRecord(row))"
-          @dragover="handleAttachmentDragOver($event, toContactRecord(row))"
-          @dragleave="handleAttachmentDragLeave($event, toContactRecord(row))"
-          @drop="handleAttachmentDrop($event, toContactRecord(row))"
-        >
-          <div
-            v-if="row.attachments?.length"
-            class="attachment-cell"
-            @mouseleave="hideAttachmentHint"
-          >
-            <div class="attachment-icons">
-              <span
-                v-for="file in row.attachments"
-                :key="file.id"
-                class="pdf-icon-wrap"
-                :class="{ 'is-clickable': !!file.url }"
-                @mouseenter="showAttachmentHint($event, file.name)"
-                @click="openAttachment(file)"
-              >
-                <el-icon class="pdf-icon"><Document /></el-icon>
-              </span>
-            </div>
-          </div>
-          <span v-else class="text-muted">-</span>
-          <div
-            v-if="attachmentDropTargetId === row.id"
-            class="attachment-drop-overlay"
-          >
-            <el-icon :size="20"><Upload /></el-icon>
+        <div class="attachment-drop-zone" @dragenter="handleAttachmentDragOver($event, toContactRecord(row))" @dragover="handleAttachmentDragOver($event, toContactRecord(row))"
+          @dragleave="handleAttachmentDragLeave($event, toContactRecord(row))" @drop="handleAttachmentDrop($event, toContactRecord(row))">
+          <AttachmentIconsCell :files="row.attachments || []" />
+          <div v-if="attachmentDropTargetId === row.id" class="attachment-drop-overlay">
+            <el-icon :size="20">
+              <Upload />
+            </el-icon>
             <span>松手追加到此行</span>
           </div>
         </div>
       </template>
     </el-table-column>
-    <el-table-column
-      label="创建时间"
-      width="110"
-      align="center"
-      header-align="center"
-      class-name="date-column"
-    >
+    <el-table-column label="操作" width="200" fixed="right">
       <template #default="{ row }">
-        {{ ContactForm.toDateOnly(row.createdAt) }}
-      </template>
-    </el-table-column>
-    <el-table-column label="操作" width="240" fixed="right">
-      <template #default="{ row }">
-        <el-button
-          v-if="canEditRow(row)"
-          type="primary"
-          link
-          @click="emit('edit', toContactRecord(row))"
-        >
+        <el-button v-if="canEditRow(row)" type="primary" link @click="emit('edit', toContactRecord(row))">
           编辑
         </el-button>
-        <el-button
-          v-if="row.relationType !== 'cancel'"
-          type="success"
-          link
-          @click="emit('append', toContactRecord(row))"
-        >
+        <el-button v-if="row.relationType !== 'cancel'" type="success" link @click="emit('append', toContactRecord(row))">
           追加
         </el-button>
-        <el-button
-          v-if="canCancelRow(row)"
-          type="warning"
-          link
-          @click="emit('cancel', toContactRecord(row))"
-        >
+        <el-button v-if="canCancelRow(row)" type="warning" link @click="emit('cancel', toContactRecord(row))">
           取消
         </el-button>
         <el-button type="danger" link @click="emit('delete', toContactRecord(row))">删除</el-button>
       </template>
     </el-table-column>
   </el-table>
-
-  <Teleport to="body">
-    <transition name="el-fade-in-linear">
-      <div
-        v-if="attachmentTooltip.visible"
-        class="attachment-tooltip-float"
-        :style="{
-          top: `${attachmentTooltip.top}px`,
-          left: `${attachmentTooltip.left}px`,
-        }"
-      >
-        {{ attachmentTooltip.text }}
-      </div>
-    </transition>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -387,9 +325,10 @@ function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  align-self: stretch;
+  flex: 1;
   width: 100%;
-  height: 100%;
-  min-height: 32px;
+  min-height: 100%;
   border-radius: 4px;
 }
 
@@ -416,24 +355,6 @@ function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
   padding: 0 4px;
 }
 
-.attachment-cell {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-
-.attachment-icons {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 6px;
-  max-width: 100%;
-  overflow: hidden;
-}
-
 .pdf-icon-wrap {
   display: inline-flex;
   align-items: center;
@@ -455,37 +376,5 @@ function handleAttachmentDrop(event: DragEvent, row: ContactRecord) {
 .pdf-icon {
   font-size: 16px;
   color: #cf1322;
-}
-</style>
-
-<style>
-.attachment-tooltip-float {
-  position: fixed;
-  z-index: 3000;
-  transform: translate(calc(-100% - 8px), -50%);
-  padding: 6px 12px;
-  background: var(--el-text-color-primary);
-  color: var(--el-bg-color);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
-  border-radius: var(--el-border-radius-base);
-  white-space: nowrap;
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid var(--el-border-color-darker);
-  box-shadow: var(--el-box-shadow-dark);
-  pointer-events: none;
-}
-
-.attachment-tooltip-float::after {
-  content: '';
-  position: absolute;
-  right: -5px;
-  top: 50%;
-  transform: translateY(-50%);
-  border: 5px solid transparent;
-  border-left-color: var(--el-text-color-primary);
 }
 </style>

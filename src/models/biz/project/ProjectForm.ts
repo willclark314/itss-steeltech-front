@@ -4,13 +4,23 @@ import type { TagRecord } from '@/models/biz/tag'
 import { BusinessSystemConfig } from '../BusinessSystemConfig'
 import { DetailWorkflowForm } from './DetailWorkflowForm'
 import type { DetailWorkflowRecord } from './DetailWorkflowForm'
+import type { DesignWorkflowRecord } from './DesignWorkflowForm'
 
-export type ProjectStatus = 'active' | 'done' | 'paused' | 'cancelled'
+export type ProjectStatus = 'not_started' | 'active' | 'done' | 'paused' | 'cancelled'
+export type ProjectStructureType =
+  | '门式钢架'
+  | '支架'
+  | '管桁架'
+  | '钢平台'
+  | '框架结构'
+  | '型钢桁架'
+  | '零星结构'
 export type ProjectNatureCode =
   | 'design'
   | 'detail'
   | 'detail_issue'
   | 'plate_layout'
+  | 'floor_deck_layout'
   | 'tile_layout'
 export type NatureProgressPhase = 'not_started' | 'in_progress' | 'completed'
 
@@ -30,12 +40,18 @@ export interface ProjectRecord {
   baseProjectNo: string
   name: string
   contactFormIds: string[]
+  /** 任一关联未删除联系单为紧急时为 true（由列表接口随项目数据返回） */
+  hasUrgentContact?: boolean
   relatedProjects: ProjectContactLink[]
   isJiagongdan: boolean
   customer: string
   status: ProjectStatus
   designCompleted: boolean
   detailCompleted: boolean
+  tileLayoutCompleted: boolean
+  floorDeckLayoutCompleted: boolean
+  drawingIssueEnabled: boolean
+  drawingIssueYearMonth: string
   natures: ProjectNatureCode[]
   tags: TagRecord[]
   assignedPersonnelIds: string[]
@@ -48,7 +64,10 @@ export interface ProjectRecord {
   designWorkPath: string
   detailWorkPath: string
   localWorkPath: string
+  structureType: string
+  estimatedWeightTons: number | null
   detailWorkflow?: DetailWorkflowRecord | null
+  designWorkflow?: DesignWorkflowRecord | null
 }
 
 export interface ProjectFilterParams {
@@ -57,20 +76,15 @@ export interface ProjectFilterParams {
   tags?: string[]
 }
 
-export type ProjectGroupBy = '' | 'nature' | 'personnel'
-
-export interface ProjectRecordGroup {
-  key: string
-  label: string
-  members: ProjectRecord[]
-}
-
 export interface ProjectFormData {
   projectNo: string
   name: string
+  contactFormIds: string[]
   status: ProjectStatus
   designCompleted: boolean
   detailCompleted: boolean
+  drawingIssueEnabled: boolean
+  drawingIssueYearMonth: string
   natures: ProjectNatureCode[]
   tagIds: string[]
   assignedPersonnelIds: string[]
@@ -81,10 +95,13 @@ export interface ProjectFormData {
   designWorkPath: string
   detailWorkPath: string
   localWorkPath: string
+  structureType: string
+  estimatedWeightTons: number | null
 }
 
 export class ProjectForm {
   static readonly STATUS = {
+    NOT_STARTED: 'not_started',
     ACTIVE: 'active',
     DONE: 'done',
     PAUSED: 'paused',
@@ -93,6 +110,7 @@ export class ProjectForm {
 
   static readonly STATUS_OPTIONS = [
     { label: '全部', value: '' },
+    { label: '未开始', value: ProjectForm.STATUS.NOT_STARTED },
     { label: '进行中', value: ProjectForm.STATUS.ACTIVE },
     { label: '已完成', value: ProjectForm.STATUS.DONE },
     { label: '已暂停', value: ProjectForm.STATUS.PAUSED },
@@ -108,8 +126,9 @@ export class ProjectForm {
 
   static readonly STATUS_MAP: Record<
     ProjectStatus,
-    { label: string; type: 'primary' | 'success' | 'warning' | 'danger' }
+    { label: string; type: 'primary' | 'success' | 'warning' | 'danger' | 'info' }
   > = {
+    not_started: { label: '未开始', type: 'info' },
     active: { label: '进行中', type: 'primary' },
     done: { label: '已完成', type: 'success' },
     paused: { label: '已暂停', type: 'warning' },
@@ -121,6 +140,7 @@ export class ProjectForm {
     DETAIL: 'detail',
     DETAIL_ISSUE: 'detail_issue',
     PLATE_LAYOUT: 'plate_layout',
+    FLOOR_DECK_LAYOUT: 'floor_deck_layout',
     TILE_LAYOUT: 'tile_layout',
   } as const
 
@@ -128,7 +148,7 @@ export class ProjectForm {
     { label: '设计', value: ProjectForm.NATURE.DESIGN },
     { label: '细化', value: ProjectForm.NATURE.DETAIL },
     { label: '细化问题', value: ProjectForm.NATURE.DETAIL_ISSUE },
-    { label: '排板', value: ProjectForm.NATURE.PLATE_LAYOUT },
+    { label: '排楼板', value: ProjectForm.NATURE.FLOOR_DECK_LAYOUT },
     { label: '排瓦', value: ProjectForm.NATURE.TILE_LAYOUT },
   ]
 
@@ -139,14 +159,15 @@ export class ProjectForm {
     design: { label: '设计', type: 'primary' },
     detail: { label: '细化', type: 'success' },
     detail_issue: { label: '细化问题', type: 'warning' },
-    plate_layout: { label: '排板', type: 'info' },
+    plate_layout: { label: '排板（历史）', type: 'info' },
+    floor_deck_layout: { label: '排楼板', type: 'info' },
     tile_layout: { label: '排瓦', type: 'info' },
   }
 
   static readonly DETAIL_GROUP_NATURES: readonly ProjectNatureCode[] = [
     ProjectForm.NATURE.DETAIL,
     ProjectForm.NATURE.DETAIL_ISSUE,
-    ProjectForm.NATURE.PLATE_LAYOUT,
+    ProjectForm.NATURE.FLOOR_DECK_LAYOUT,
     ProjectForm.NATURE.TILE_LAYOUT,
   ]
 
@@ -155,15 +176,28 @@ export class ProjectForm {
     detail: '细化组',
     detail_issue: '细化组',
     plate_layout: '细化组',
+    floor_deck_layout: '细化组',
     tile_layout: '细化组',
   }
 
+  static readonly STRUCTURE_TYPE_OPTIONS: Array<{ label: string; value: ProjectStructureType }> = [
+    { label: '门式钢架', value: '门式钢架' },
+    { label: '支架', value: '支架' },
+    { label: '管桁架', value: '管桁架' },
+    { label: '钢平台', value: '钢平台' },
+    { label: '框架结构', value: '框架结构' },
+    { label: '型钢桁架', value: '型钢桁架' },
+    { label: '零星结构', value: '零星结构' },
+  ]
+
   static readonly NATURE_PROGRESS_LABELS: Record<
-    'design' | 'detail',
+    'design' | 'detail' | 'tile_layout' | 'floor_deck_layout',
     Record<NatureProgressPhase, string>
   > = {
     design: { not_started: '未设计', in_progress: '设计中', completed: '设计完' },
     detail: { not_started: '未细化', in_progress: '细化中', completed: '细化完' },
+    tile_layout: { not_started: '未排瓦', in_progress: '排瓦中', completed: '已排瓦' },
+    floor_deck_layout: { not_started: '未排楼板', in_progress: '排楼板中', completed: '已排楼板' },
   }
 
   static readonly NATURE_PROGRESS_TYPE: Record<
@@ -175,14 +209,7 @@ export class ProjectForm {
     completed: 'success',
   }
 
-  static readonly GROUP_BY_OPTIONS = [
-    { label: '列表', value: '' as ProjectGroupBy },
-    { label: '按项目性质', value: 'nature' as ProjectGroupBy },
-    { label: '按人员', value: 'personnel' as ProjectGroupBy },
-  ] as const
-
-  private static readonly UNASSIGNED_GROUP_KEY = '__unassigned__'
-  private static readonly UNSET_NATURE_KEY = '__unset__'
+  static readonly UNASSIGNED_PERSONNEL_FILTER = '__unassigned__'
 
   readonly record: ProjectRecord
 
@@ -222,6 +249,14 @@ export class ProjectForm {
     return this.record.status === ProjectForm.STATUS.DONE || this.isCancelled()
   }
 
+  /**
+   * 设计/细化进度是否允许按流程状态编辑。
+   * 已取消也允许修改；不要用 isTerminal()（含 cancelled）做拦截。
+   */
+  static canEditNatureProgressByStatus(_status: ProjectStatus) {
+    return true
+  }
+
   hasContactForm(contactFormId: string) {
     return this.record.contactFormIds?.includes(contactFormId) ?? false
   }
@@ -239,8 +274,29 @@ export class ProjectForm {
     return ProjectForm.parseBaseProjectNo(record.projectNo)
   }
 
+  static hasUrgentContact(record: Pick<ProjectRecord, 'hasUrgentContact'>) {
+    return Boolean(record.hasUrgentContact)
+  }
+
   static formatDisplayProjectNo(projectNo: string): string {
     return ProjectForm.parseBaseProjectNo(projectNo)
+  }
+
+  /** 点击复制项目号：AB25059 → 25059；26218-1 → 26218-1 */
+  static extractProjectNoCopyText(projectNo: string): string {
+    const displayNo = ProjectForm.formatDisplayProjectNo(projectNo).trim()
+    if (!displayNo) return ''
+
+    const withoutPrefix = displayNo.replace(/^[A-Za-z]+/, '')
+    const hyphenMatch = withoutPrefix.match(/^(\d+-\d+)$/)
+    if (hyphenMatch) return hyphenMatch[1]
+
+    if (withoutPrefix && /^\d+$/.test(withoutPrefix)) {
+      return withoutPrefix
+    }
+
+    const digits = withoutPrefix.replace(/\D/g, '')
+    return digits || displayNo
   }
 
   static getContactLinks(record: ProjectRecord): ProjectContactLink[] {
@@ -270,6 +326,7 @@ export class ProjectForm {
       assignedPersonnelIds: [...record.assignedPersonnelIds],
       assignedPersonnel: record.assignedPersonnel.map((item) => ({ ...item })),
       detailWorkflow: record.detailWorkflow ? { ...record.detailWorkflow } : record.detailWorkflow,
+      designWorkflow: record.designWorkflow ? { ...record.designWorkflow } : record.designWorkflow,
     }
   }
 
@@ -321,89 +378,6 @@ export class ProjectForm {
       .sort((a, b) => orderMap.get(a.projectNo)! - orderMap.get(b.projectNo)!)
   }
 
-  static groupRecords(
-    records: ProjectRecord[],
-    groupBy: ProjectGroupBy,
-  ): ProjectRecordGroup[] {
-    if (!groupBy) return []
-
-    if (groupBy === 'nature') {
-      return ProjectForm.groupByMultiKey(
-        records,
-        (record) =>
-          record.natures.length ? record.natures : [ProjectForm.UNSET_NATURE_KEY],
-        [
-          ProjectForm.NATURE.DESIGN,
-          ProjectForm.NATURE.DETAIL,
-          ProjectForm.NATURE.DETAIL_ISSUE,
-          ProjectForm.NATURE.PLATE_LAYOUT,
-          ProjectForm.NATURE.TILE_LAYOUT,
-          ProjectForm.UNSET_NATURE_KEY,
-        ],
-        (key) => {
-          if (key === ProjectForm.UNSET_NATURE_KEY) return '未设置'
-          return ProjectForm.getNatureLabel(key as ProjectNatureCode)
-        },
-      )
-    }
-
-    const personnelMap = new Map<string, ProjectAssignee>()
-    for (const record of records) {
-      for (const person of record.assignedPersonnel) {
-        personnelMap.set(person.id, person)
-      }
-    }
-
-    const orderedPersonnelIds = [...personnelMap.values()]
-      .sort((a, b) => {
-        const teamCompare = a.team.localeCompare(b.team, 'zh-CN')
-        return teamCompare !== 0 ? teamCompare : a.name.localeCompare(b.name, 'zh-CN')
-      })
-      .map((person) => person.id)
-
-    return ProjectForm.groupByMultiKey(
-      records,
-      (record) =>
-        record.assignedPersonnel.length
-          ? record.assignedPersonnel.map((person) => person.id)
-          : [ProjectForm.UNASSIGNED_GROUP_KEY],
-      [...orderedPersonnelIds, ProjectForm.UNASSIGNED_GROUP_KEY],
-      (key) => {
-        if (key === ProjectForm.UNASSIGNED_GROUP_KEY) return '未分配'
-        const person = personnelMap.get(key)
-        return person ? person.name : key
-      },
-    )
-  }
-
-  private static groupByMultiKey(
-    records: ProjectRecord[],
-    getKeys: (record: ProjectRecord) => string[],
-    orderedKeys: readonly string[],
-    getLabel?: (key: string) => string,
-  ): ProjectRecordGroup[] {
-    const groups = new Map<string, ProjectRecord[]>()
-
-    for (const record of records) {
-      for (const key of getKeys(record)) {
-        const members = groups.get(key) ?? []
-        members.push(record)
-        groups.set(key, members)
-      }
-    }
-
-    const extraKeys = [...groups.keys()].filter((key) => !orderedKeys.includes(key))
-    const keySequence = [...orderedKeys, ...extraKeys]
-
-    return keySequence
-      .map((key) => ({
-        key,
-        label: getLabel?.(key) ?? key,
-        members: groups.get(key) ?? [],
-      }))
-      .filter((group) => group.members.length > 0)
-  }
-
   static getNatureLabel(nature: ProjectNatureCode) {
     return ProjectForm.NATURE_MAP[nature]?.label ?? ''
   }
@@ -424,9 +398,11 @@ export class ProjectForm {
     return record.natures.some((nature) => ProjectForm.isDetailGroupNature(nature))
   }
 
-  static isNatureCompleted(record: Pick<ProjectRecord, 'designCompleted' | 'detailCompleted'>, nature: ProjectNatureCode) {
-    if (nature === ProjectForm.NATURE.DESIGN) return record.designCompleted
-    if (ProjectForm.isDetailGroupNature(nature)) return record.detailCompleted
+  static isNatureCompleted(record: { designCompleted?: boolean; detailCompleted?: boolean; tileLayoutCompleted?: boolean; floorDeckLayoutCompleted?: boolean }, nature: ProjectNatureCode) {
+    if (nature === ProjectForm.NATURE.DESIGN) return record.designCompleted ?? false
+    if (nature === ProjectForm.NATURE.TILE_LAYOUT) return record.tileLayoutCompleted ?? false
+    if (nature === ProjectForm.NATURE.FLOOR_DECK_LAYOUT) return record.floorDeckLayoutCompleted ?? false
+    if (ProjectForm.isDetailGroupNature(nature)) return record.detailCompleted ?? false
     return false
   }
 
@@ -441,8 +417,13 @@ export class ProjectForm {
     return hasTeamAssignee || ProjectForm.hasLocalWorkPath(workPath)
   }
 
-  static isTrackableNature(nature: ProjectNatureCode): nature is 'design' | 'detail' {
-    return nature === ProjectForm.NATURE.DESIGN || nature === ProjectForm.NATURE.DETAIL
+  static isTrackableNature(nature: ProjectNatureCode): nature is 'design' | 'detail' | 'tile_layout' | 'floor_deck_layout' {
+    return (
+      nature === ProjectForm.NATURE.DESIGN ||
+      nature === ProjectForm.NATURE.DETAIL ||
+      nature === ProjectForm.NATURE.TILE_LAYOUT ||
+      nature === ProjectForm.NATURE.FLOOR_DECK_LAYOUT
+    )
   }
 
   static getNatureProgressPhase(
@@ -500,6 +481,8 @@ export class ProjectForm {
       | 'natures'
       | 'designCompleted'
       | 'detailCompleted'
+      | 'tileLayoutCompleted'
+      | 'floorDeckLayoutCompleted'
       | 'assignedPersonnel'
       | 'designWorkPath'
       | 'detailWorkPath'
@@ -507,24 +490,36 @@ export class ProjectForm {
     >,
   ): Array<{ label: string; type: 'primary' | 'success' | 'warning' | 'danger' | 'info' }> {
     const processMeta = ProjectForm.STATUS_MAP[record.status]
+    const items: Array<{ label: string; type: 'primary' | 'success' | 'warning' | 'danger' | 'info' }> = [
+      { label: processMeta.label, type: processMeta.type },
+    ]
 
     if (ProjectForm.hasDualNatureTasks(record)) {
-      const natureItems = [
+      items.push(
         ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DESIGN),
         DetailWorkflowForm.getMainPhaseMeta(record),
-      ]
-      return [{ label: processMeta.label, type: processMeta.type }, ...natureItems]
-    }
-
-    if (
+      )
+    } else if (
       DetailWorkflowForm.needsDetailWorkflow(record.natures) &&
       record.detailWorkflow
     ) {
-      const detailMeta = DetailWorkflowForm.getMainPhaseMeta(record)
-      return [{ label: processMeta.label, type: processMeta.type }, detailMeta]
+      items.push(DetailWorkflowForm.getMainPhaseMeta(record))
+    } else {
+      if (ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.DESIGN)) {
+        items.push(ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DESIGN))
+      } else if (ProjectForm.hasDetailGroupNature(record)) {
+        items.push(ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.DETAIL))
+      }
     }
 
-    return [{ label: processMeta.label, type: processMeta.type }]
+    if (ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.TILE_LAYOUT)) {
+      items.push(ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.TILE_LAYOUT))
+    }
+    if (ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)) {
+      items.push(ProjectForm.getNatureProgressMeta(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT))
+    }
+
+    return items
   }
 
   static formatCustomerFromPersonnel(assignees: Array<{ name: string }>) {
@@ -556,13 +551,29 @@ export class ProjectForm {
     return BusinessSystemConfig.hasLocalWorkPath(relativePath)
   }
 
+  static formatDrawingIssueYearMonth(value?: string) {
+    const normalized = (value || '').trim()
+    if (!normalized) return '-'
+    const [year, month] = normalized.split('-')
+    if (!year || !month) return normalized
+    return `${year}年${Number(month)}月`
+  }
+
+  static formatEstimatedWeightTons(value?: number | null) {
+    if (value === null || value === undefined || Number.isNaN(value)) return '-'
+    return `${value} t`
+  }
+
   static createEmptyForm(): ProjectFormData {
     return {
       projectNo: '',
       name: '',
+      contactFormIds: [],
       status: ProjectForm.STATUS.ACTIVE,
       designCompleted: false,
       detailCompleted: false,
+      drawingIssueEnabled: false,
+      drawingIssueYearMonth: '',
       natures: [],
       tagIds: [],
       assignedPersonnelIds: [],
@@ -573,6 +584,8 @@ export class ProjectForm {
       designWorkPath: '',
       detailWorkPath: '',
       localWorkPath: '',
+      structureType: '',
+      estimatedWeightTons: null,
     }
   }
 
@@ -580,9 +593,12 @@ export class ProjectForm {
     return {
       projectNo: record.projectNo,
       name: record.name,
+      contactFormIds: [...(record.contactFormIds || [])],
       status: record.status,
       designCompleted: record.designCompleted,
       detailCompleted: record.detailCompleted,
+      drawingIssueEnabled: Boolean(record.drawingIssueEnabled),
+      drawingIssueYearMonth: record.drawingIssueYearMonth || '',
       natures: [...record.natures],
       tagIds: (record.tags || []).map((item) => item.id),
       assignedPersonnelIds: [...record.assignedPersonnelIds],
@@ -593,7 +609,56 @@ export class ProjectForm {
       designWorkPath: record.designWorkPath,
       detailWorkPath: record.detailWorkPath,
       localWorkPath: ProjectForm.resolvePrimaryLocalWorkPath(record),
+      structureType: record.structureType || '',
+      estimatedWeightTons: record.estimatedWeightTons ?? null,
     }
+  }
+
+  /** 短横线拆分根号：AB25059-1 → AB25059 */
+  static parseRootProjectNo(projectNo: string): string {
+    const base = ProjectForm.parseBaseProjectNo(projectNo)
+    const match = base.match(/^(.*)-(\d+)$/)
+    return match ? match[1] : base
+  }
+
+  static hasHyphenSplitSuffix(projectNo: string): boolean {
+    const base = ProjectForm.parseBaseProjectNo(projectNo)
+    return /-\d+$/.test(base)
+  }
+
+  static suggestNextHyphenSplitProjectNo(rootOrNo: string, existingProjectNos: string[]): string {
+    const root = ProjectForm.parseRootProjectNo(rootOrNo)
+    const existing = new Set(
+      existingProjectNos.map((item) => ProjectForm.parseBaseProjectNo(item)),
+    )
+    let index = 1
+    while (existing.has(`${root}-${index}`)) {
+      index += 1
+    }
+    return `${root}-${index}`
+  }
+
+  static createFormForCopy(record: ProjectRecord, existingProjectNos: string[]): ProjectFormData {
+    const form = ProjectForm.createFormFromRecord(record)
+    form.projectNo = ProjectForm.suggestNextHyphenSplitProjectNo(
+      record.projectNo,
+      existingProjectNos,
+    )
+    form.actualStartDate = ''
+    form.actualEndDate = ''
+    return form
+  }
+
+  static createFormFromContact(
+    projectNo: string,
+    options: {
+      contactFormId?: string
+      contactTitle?: string
+      plannedStartDate?: string
+      receivedDate?: string
+    } = {},
+  ): ProjectFormData {
+    return ProjectForm.createFormFromRecord(ProjectForm.createFromContact(projectNo, options))
   }
 
   static createFromContact(
@@ -621,6 +686,10 @@ export class ProjectForm {
       status: ProjectForm.STATUS.ACTIVE,
       designCompleted: false,
       detailCompleted: false,
+      tileLayoutCompleted: false,
+      floorDeckLayoutCompleted: false,
+      drawingIssueEnabled: false,
+      drawingIssueYearMonth: '',
       natures: [],
       tags: [],
       assignedPersonnelIds: [],
@@ -633,6 +702,105 @@ export class ProjectForm {
       designWorkPath: '',
       detailWorkPath: '',
       localWorkPath: '',
+      structureType: '',
+      estimatedWeightTons: null,
     }
+  }
+
+  /** Parse a flow filter value like "process:active" → { kind, value } */
+  static parseFlowFilter(filterValue: string): { kind: string; value: string } | null {
+    const separatorIndex = filterValue.indexOf(':')
+    if (separatorIndex <= 0) return null
+    const kind = filterValue.slice(0, separatorIndex)
+    const value = filterValue.slice(separatorIndex + 1)
+    if (!value) return null
+    return { kind, value }
+  }
+
+  /** Check whether a record matches a single flow filter value (no team check). */
+  static matchesFlowFilter(
+    record: Pick<
+      ProjectRecord,
+      'status' | 'natures' | 'designCompleted' | 'detailCompleted'
+      | 'tileLayoutCompleted' | 'floorDeckLayoutCompleted'
+      | 'assignedPersonnel' | 'designWorkPath' | 'detailWorkPath' | 'detailWorkflow'
+    >,
+    filterValue: string,
+  ): boolean {
+    const parsed = ProjectForm.parseFlowFilter(filterValue)
+    if (!parsed) return false
+
+    if (parsed.kind === 'process') {
+      return record.status === parsed.value
+    }
+
+    if (parsed.kind === 'design') {
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.DESIGN)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'detail') {
+      const usesWorkflow =
+        DetailWorkflowForm.needsDetailWorkflow(record.natures) && Boolean(record.detailWorkflow)
+      if (usesWorkflow) return false
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.DETAIL)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'detailMain') {
+      if (
+        !DetailWorkflowForm.needsDetailWorkflow(record.natures) ||
+        !record.detailWorkflow
+      ) {
+        return false
+      }
+      const hasPlateLayout = DetailWorkflowForm.hasPlateLayoutPhase(record.detailWorkflow)
+      const phase = DetailWorkflowForm.deriveMainPhase(record.detailWorkflow, hasPlateLayout)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'tile') {
+      if (!ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.TILE_LAYOUT)) return false
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.TILE_LAYOUT)
+      return phase === parsed.value
+    }
+
+    if (parsed.kind === 'floorDeck') {
+      if (!ProjectForm.isNatureApplicable(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)) return false
+      const phase = ProjectForm.getNatureProgressPhase(record, ProjectForm.NATURE.FLOOR_DECK_LAYOUT)
+      return phase === parsed.value
+    }
+
+    return false
+  }
+
+  /** Check whether a record matches any of the given flow filter values (OR logic). */
+  static matchesFlowFilters(
+    record: Parameters<typeof ProjectForm.matchesFlowFilter>[0],
+    filterValues: readonly string[],
+  ): boolean {
+    if (!filterValues.length) return true
+    return filterValues.some((fv) => ProjectForm.matchesFlowFilter(record, fv))
+  }
+
+  /** Check whether a record has any of the given nature codes (OR logic). */
+  static matchesNatureFilters(
+    record: Pick<ProjectRecord, 'natures'>,
+    natureFilters: readonly string[],
+  ): boolean {
+    if (!natureFilters.length) return true
+    return natureFilters.some((nf) => record.natures.includes(nf as ProjectNatureCode))
+  }
+
+  /** Check whether a record is assigned to the given personnel (empty id = no filter). */
+  static matchesAssignedPersonnelFilter(
+    record: Pick<ProjectRecord, 'assignedPersonnelIds'>,
+    personnelId: string,
+  ): boolean {
+    if (!personnelId) return true
+    if (personnelId === ProjectForm.UNASSIGNED_PERSONNEL_FILTER) {
+      return record.assignedPersonnelIds.length === 0
+    }
+    return record.assignedPersonnelIds.includes(personnelId)
   }
 }

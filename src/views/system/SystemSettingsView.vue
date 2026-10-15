@@ -8,9 +8,20 @@ import {
   updateSystemConfig,
   type HostDriveInfo,
 } from '@/api/system'
+import {
+  fetchDbMigrateStatus,
+  previewDbMigrate,
+  runDbMigrate,
+  verifyDbMigrate,
+  type DbMigrateResult,
+  type DbMigrateStatus,
+  type DbSyncMode,
+} from '@/api/dbMigrate'
 import { BusinessSystemConfig } from '@/models/biz'
 import { SystemConfigForm } from '@/models/biz/SystemConfigForm'
+import { canEditPage } from '@/utils/permission'
 
+const canEdit = computed(() => canEditPage('system-settings'))
 const loading = ref(false)
 const saving = ref(false)
 const drivesLoading = ref(false)
@@ -25,6 +36,13 @@ const localIpOptions = ref<string[]>([])
 const ipSelectWrapRef = ref<HTMLElement>()
 const maxVisibleIpTags = ref(99)
 let ipTagsResizeObserver: ResizeObserver | null = null
+
+const migrateStatus = ref<DbMigrateStatus | null>(null)
+const migrateTargetUrl = ref('')
+const migrateMode = ref<DbSyncMode>('upsert')
+const migrateBackupFirst = ref(true)
+const migrateBusy = ref(false)
+const migrateResult = ref<DbMigrateResult | null>(null)
 
 type DriveRowLike = {
   name?: string
@@ -54,6 +72,25 @@ const detailJiagongdanFullPathPreview = computed(() =>
 )
 const detailFullPathPreview = computed(() =>
   SystemConfigForm.buildSampleFullPath(form.localWorkPath, form.localWorkPath.pathPatterns.detail),
+)
+
+const designArchiveTemplateFullPathPreview = computed(() =>
+  SystemConfigForm.buildSampleFullPath(
+    form.localWorkPath,
+    form.localWorkPath.archiveTemplatePaths.design,
+  ),
+)
+const detailJiagongdanArchiveTemplateFullPathPreview = computed(() =>
+  SystemConfigForm.buildSampleFullPath(
+    form.localWorkPath,
+    form.localWorkPath.archiveTemplatePaths.detailJiagongdan,
+  ),
+)
+const detailArchiveTemplateFullPathPreview = computed(() =>
+  SystemConfigForm.buildSampleFullPath(
+    form.localWorkPath,
+    form.localWorkPath.archiveTemplatePaths.detail,
+  ),
 )
 
 const ipSelectOptions = computed(() =>
@@ -197,28 +234,6 @@ function driveFreePercent(row: DriveRowLike) {
   return Math.min(100, Math.round((row.freeBytes / row.totalBytes) * 100))
 }
 
-function canSelectDrive(row: DriveRowLike) {
-  return typeof row.name === 'string' && /^[A-Za-z]$/.test(row.name)
-}
-
-function isCurrentDrive(row: DriveRowLike) {
-  return typeof row.name === 'string'
-    && form.localWorkPath.drive.toUpperCase() === row.name.toUpperCase()
-}
-
-function handleSelectDrive(row: DriveRowLike) {
-  if (!canSelectDrive(row) || isCurrentDrive(row)) return
-  const driveName = row.name
-  if (typeof driveName !== 'string') return
-  form.localWorkPath.drive = driveName.toUpperCase()
-  drivesDialogVisible.value = false
-  ElMessage.success(`已选择 ${row.label ?? driveName} 作为默认盘符`)
-}
-
-function driveRowClassName({ row }: { row: DriveRowLike }) {
-  return isCurrentDrive(row) ? 'drive-row-selected' : ''
-}
-
 async function handleViewDrives() {
   const ip = form.localWorkPath.ip.trim()
   if (!ip) {
@@ -247,6 +262,80 @@ async function handleViewDrives() {
   }
 }
 
+async function loadMigrateStatus() {
+  try {
+    migrateStatus.value = await fetchDbMigrateStatus()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载数据库状态失败')
+  }
+}
+
+function requireMigrateTargetUrl(): string | null {
+  const url = migrateTargetUrl.value.trim()
+  if (!url) {
+    ElMessage.warning('请填写目标库 DATABASE_URL')
+    return null
+  }
+  return url
+}
+
+async function handleMigratePreview() {
+  const targetUrl = requireMigrateTargetUrl()
+  if (!targetUrl) return
+  migrateBusy.value = true
+  migrateResult.value = null
+  try {
+    migrateResult.value = await previewDbMigrate(targetUrl)
+    ElMessage.success('预览完成（未写入目标库）')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '预览失败')
+  } finally {
+    migrateBusy.value = false
+  }
+}
+
+async function handleMigrateRun() {
+  const targetUrl = requireMigrateTargetUrl()
+  if (!targetUrl) return
+  migrateBusy.value = true
+  migrateResult.value = null
+  try {
+    migrateResult.value = await runDbMigrate({
+      targetUrl,
+      mode: migrateMode.value,
+      backupFirst: migrateBackupFirst.value,
+    })
+    if (migrateResult.value.ok) {
+      ElMessage.success('迁移完成，请按下方指引修改 DATABASE_URL 并重启后端')
+    } else {
+      ElMessage.warning('迁移结束但存在错误或校验未通过，请查看结果')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '迁移失败')
+  } finally {
+    migrateBusy.value = false
+  }
+}
+
+async function handleMigrateVerify() {
+  const targetUrl = requireMigrateTargetUrl()
+  if (!targetUrl) return
+  migrateBusy.value = true
+  migrateResult.value = null
+  try {
+    migrateResult.value = await verifyDbMigrate(targetUrl)
+    if (migrateResult.value.ok) {
+      ElMessage.success('行数校验通过')
+    } else {
+      ElMessage.warning('行数校验未通过，请查看差异')
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '校验失败')
+  } finally {
+    migrateBusy.value = false
+  }
+}
+
 watch(
   () => form.localWorkPath.ip,
   (nextIp) => {
@@ -264,6 +353,7 @@ watch(
 onMounted(async () => {
   await loadLocalIpOptions()
   await loadConfig()
+  await loadMigrateStatus()
   await nextTick()
   setupIpTagsResizeObserver()
 })
@@ -360,16 +450,6 @@ onUnmounted(() => {
           </div>
         </el-form-item>
 
-        <el-form-item label="默认盘符" prop="localWorkPath.drive">
-          <el-input
-            v-model="form.localWorkPath.drive"
-            placeholder="如 F"
-            maxlength="1"
-            style="max-width: 120px"
-          />
-          <span class="field-hint">单个字母，不含冒号</span>
-        </el-form-item>
-
         <el-form-item label="路径智能匹配">
           <el-switch
             v-model="form.localWorkPath.suggestPathOnMismatch"
@@ -434,7 +514,51 @@ onUnmounted(() => {
           </div>
         </el-form-item>
 
-        <el-form-item>
+        <div class="section-title">归档模板路径</div>
+        <p class="section-desc">
+          创建项目归档路径时，从此处配置的模板目录复制文件与文件夹结构到目标路径。
+        </p>
+
+        <el-form-item label="设计归档模板">
+          <el-input
+            v-model="form.localWorkPath.archiveTemplatePaths.design"
+            type="textarea"
+            :rows="2"
+            placeholder="如 e\【项目归档】设计组\模板\设计归档模板"
+          />
+          <div class="pattern-preview-block">
+            <span class="pattern-preview-label">完整路径示例</span>
+            <code class="path-preview">{{ designArchiveTemplateFullPathPreview || '（未配置）' }}</code>
+          </div>
+        </el-form-item>
+
+        <el-form-item label="细化加工单模板">
+          <el-input
+            v-model="form.localWorkPath.archiveTemplatePaths.detailJiagongdan"
+            type="textarea"
+            :rows="2"
+            placeholder="如 f\1【项目归档】深化组\模板\加工单归档模板"
+          />
+          <div class="pattern-preview-block">
+            <span class="pattern-preview-label">完整路径示例</span>
+            <code class="path-preview">{{ detailJiagongdanArchiveTemplateFullPathPreview || '（未配置）' }}</code>
+          </div>
+        </el-form-item>
+
+        <el-form-item label="细化归档模板">
+          <el-input
+            v-model="form.localWorkPath.archiveTemplatePaths.detail"
+            type="textarea"
+            :rows="2"
+            placeholder="如 f\1【项目归档】深化组\模板\深化组归档模板"
+          />
+          <div class="pattern-preview-block">
+            <span class="pattern-preview-label">完整路径示例</span>
+            <code class="path-preview">{{ detailArchiveTemplateFullPathPreview || '（未配置）' }}</code>
+          </div>
+        </el-form-item>
+
+        <el-form-item v-if="canEdit">
           <el-button type="primary" :loading="saving" @click="handleSave">
             保存配置
           </el-button>
@@ -443,6 +567,107 @@ onUnmounted(() => {
           </el-button>
         </el-form-item>
       </el-form>
+    </el-card>
+
+    <el-card shadow="never" class="migrate-card">
+      <template #header>
+        <div class="card-header">
+          <span>数据库迁移</span>
+          <span class="card-subtitle">SQLite ↔ MySQL 全量迁移（改配置后需重启）</span>
+        </div>
+      </template>
+
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        class="page-alert"
+        title="迁移只会把数据写入目标库，不会热切换当前连接。完成后请修改服务器 DATABASE_URL 并重启后端。"
+      />
+
+      <div class="migrate-status" v-loading="!migrateStatus && migrateBusy">
+        <p class="section-desc">
+          当前后端：
+          <strong>{{ migrateStatus?.current_backend || '—' }}</strong>
+          <span class="field-hint">{{ migrateStatus?.current_url_masked || '' }}</span>
+        </p>
+        <p v-if="migrateStatus?.suggested_target_backend" class="section-desc">
+          建议目标：{{ migrateStatus.suggested_target_backend }}
+        </p>
+      </div>
+
+      <el-form label-width="140px" class="config-form" @submit.prevent>
+        <el-form-item label="目标 DATABASE_URL">
+          <el-input
+            v-model="migrateTargetUrl"
+            type="textarea"
+            :rows="2"
+            :disabled="!canEdit || migrateBusy"
+            placeholder="如 mysql+pymysql://user:pass@127.0.0.1:3306/itss_steeltech 或 sqlite:///D:/data/steeltech.db"
+          />
+        </el-form-item>
+
+        <el-form-item label="写入模式">
+          <el-radio-group v-model="migrateMode" :disabled="!canEdit || migrateBusy">
+            <el-radio value="upsert">upsert（按主键合并）</el-radio>
+            <el-radio value="replace">replace（先清空目标表）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="迁移前备份">
+          <el-switch v-model="migrateBackupFirst" :disabled="!canEdit || migrateBusy" />
+          <span class="field-hint">执行迁移时先备份当前库</span>
+        </el-form-item>
+
+        <el-form-item v-if="canEdit">
+          <el-button :loading="migrateBusy" @click="handleMigratePreview">预览</el-button>
+          <el-button type="primary" :loading="migrateBusy" @click="handleMigrateRun">
+            执行迁移
+          </el-button>
+          <el-button :loading="migrateBusy" @click="handleMigrateVerify">仅校验</el-button>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="migrateResult" class="migrate-result">
+        <div class="section-title">最近一次结果</div>
+        <p class="section-desc">
+          状态：
+          <strong>{{ migrateResult.ok === false ? '未通过 / 有错误' : migrateResult.ok ? '成功' : '已返回' }}</strong>
+          <template v-if="migrateResult.sync">
+            · 表 {{ migrateResult.sync.tables }} · 行 {{ migrateResult.sync.rows }} · 错误
+            {{ migrateResult.sync.errors }}
+          </template>
+        </p>
+
+        <ul
+          v-if="migrateResult.switch_instructions?.steps?.length"
+          class="migrate-steps"
+        >
+          <li v-for="(step, index) in migrateResult.switch_instructions.steps" :key="index">
+            {{ step }}
+          </li>
+        </ul>
+
+        <div
+          v-if="migrateResult.verify && migrateResult.verify.mismatches.length"
+          class="migrate-diff"
+        >
+          <p class="section-desc">行数差异：</p>
+          <ul>
+            <li
+              v-for="item in migrateResult.verify.mismatches"
+              :key="item.table"
+            >
+              {{ item.table }}：源 {{ item.source_count }} / 目标 {{ item.target_count }}
+            </li>
+          </ul>
+        </div>
+
+        <details v-if="migrateResult.logs?.length" class="migrate-logs">
+          <summary>日志（{{ migrateResult.logs.length }}）</summary>
+          <pre>{{ migrateResult.logs.join('\n') }}</pre>
+        </details>
+      </div>
     </el-card>
 
     <el-dialog
@@ -454,14 +679,13 @@ onUnmounted(() => {
       <p class="dialog-desc">
         {{
           drivesDialogIsLocal
-            ? '本机逻辑驱动器，可查看剩余空间并选择默认盘符'
-            : '远程共享或管理盘，单字母共享可直接选择为默认盘符'
+            ? '本机逻辑驱动器，可查看剩余空间'
+            : '远程共享或管理盘'
         }}
       </p>
       <el-table
         v-loading="drivesLoading"
         :data="drivesList"
-        :row-class-name="driveRowClassName"
         empty-text="未检测到可访问驱动"
       >
         <el-table-column prop="label" label="名称" min-width="88" />
@@ -488,20 +712,6 @@ onUnmounted(() => {
             <span v-else class="drive-space-empty">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="88" align="center">
-          <template #default="{ row }">
-            <el-button
-              v-if="canSelectDrive(row)"
-              link
-              :type="isCurrentDrive(row) ? 'success' : 'primary'"
-              :disabled="isCurrentDrive(row)"
-              @click="handleSelectDrive(row)"
-            >
-              {{ isCurrentDrive(row) ? '已选择' : '选择' }}
-            </el-button>
-            <span v-else class="drive-select-disabled">-</span>
-          </template>
-        </el-table-column>
       </el-table>
     </el-dialog>
   </div>
@@ -510,6 +720,41 @@ onUnmounted(() => {
 <style scoped>
 .system-config-page {
   max-width: 760px;
+}
+
+.migrate-card {
+  margin-top: 16px;
+}
+
+.migrate-steps {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-regular);
+}
+
+.migrate-diff ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.migrate-logs {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.migrate-logs pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .card-header {
@@ -605,10 +850,6 @@ onUnmounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-:deep(.drive-row-selected) {
-  --el-table-tr-bg-color: var(--el-color-success-light-9);
-}
-
 .drive-space {
   display: flex;
   flex-direction: column;
@@ -621,8 +862,7 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 
-.drive-space-empty,
-.drive-select-disabled {
+.drive-space-empty {
   color: var(--el-text-color-placeholder);
 }
 </style>

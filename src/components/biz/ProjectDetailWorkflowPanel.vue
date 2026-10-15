@@ -2,13 +2,11 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { saveDetailWorkflow } from '@/api/projects'
-import { DetailWorkflowForm, ProjectForm } from '@/models/biz/project'
-import type { DetailWorkflowEditForm, ProjectNatureCode, ProjectRecord } from '@/models/biz/project'
+import { DetailWorkflowForm } from '@/models/biz/project'
+import type { DetailWorkflowEditForm, ProjectRecord } from '@/models/biz/project'
 
 const props = defineProps<{
   record: ProjectRecord
-  /** 编辑中的项目性质（未保存前用于预览排板阶段是否可编辑） */
-  previewNatures?: ProjectRecord['natures']
 }>()
 
 const emit = defineEmits<{
@@ -17,13 +15,14 @@ const emit = defineEmits<{
 
 const saving = ref(false)
 const editForm = reactive<DetailWorkflowEditForm>({
+  plateLayoutEnabled: true,
   modelingStatus: 'not_started',
   modelingStartedAt: '',
   modelingCompletedAt: '',
   drawingStatus: 'not_started',
   drawingStartedAt: '',
   drawingCompletedAt: '',
-  plateLayoutStatus: 'not_applicable',
+  plateLayoutStatus: 'not_started',
   plateLayoutStartedAt: '',
   plateLayoutCompletedAt: '',
 })
@@ -32,17 +31,7 @@ const workflow = computed(() => props.record.detailWorkflow ?? null)
 const hasWorkflow = computed(() =>
   DetailWorkflowForm.needsDetailWorkflow(props.record.natures),
 )
-const effectiveNatures = computed<ProjectNatureCode[]>(() =>
-  props.previewNatures?.length ? [...props.previewNatures] : [...props.record.natures],
-)
-const phaseRows = computed(() =>
-  DetailWorkflowForm.getEditablePhaseRows(effectiveNatures.value),
-)
-const needsSaveNaturesFirst = computed(() => {
-  const previewHasPlate = effectiveNatures.value.includes(ProjectForm.NATURE.PLATE_LAYOUT)
-  const savedHasPlate = props.record.natures.includes(ProjectForm.NATURE.PLATE_LAYOUT)
-  return previewHasPlate && !savedHasPlate
-})
+const phaseRows = computed(() => DetailWorkflowForm.getEditablePhaseRows(editForm))
 const mainPhaseMeta = computed(() => DetailWorkflowForm.getMainPhaseMeta(props.record))
 
 function resetFormFromRecord() {
@@ -69,12 +58,12 @@ function handleStatusChange(
   }
 }
 
+function handlePlateLayoutEnabledChange(value: string | number | boolean) {
+  DetailWorkflowForm.applyPlateLayoutEnabledChange(editForm, Boolean(value))
+}
+
 async function handleSave() {
   if (!workflow.value) return
-  if (needsSaveNaturesFirst.value) {
-    ElMessage.warning('请先在上方勾选「排板」并保存项目，再编辑排板流程。')
-    return
-  }
 
   saving.value = true
   try {
@@ -113,12 +102,23 @@ async function handleSave() {
             {{ phase.label }}
             <span v-if="phase.key === 'plate_layout'" class="detail-workflow-phase__sublabel">（钢板）</span>
           </span>
-          <el-tag
-            size="small"
-            :type="DetailWorkflowForm.getPhaseStatusMeta(editForm[phase.statusKey]).type"
-          >
-            {{ DetailWorkflowForm.getPhaseStatusMeta(editForm[phase.statusKey]).label }}
-          </el-tag>
+          <div class="detail-workflow-phase__head-actions">
+            <el-switch
+              v-if="phase.key === 'plate_layout'"
+              :model-value="editForm.plateLayoutEnabled"
+              inline-prompt
+              active-text="启用"
+              inactive-text="关闭"
+              :disabled="saving"
+              @update:model-value="handlePlateLayoutEnabledChange"
+            />
+            <el-tag
+              size="small"
+              :type="DetailWorkflowForm.getPhaseStatusMeta(editForm[phase.statusKey]).type"
+            >
+              {{ DetailWorkflowForm.getPhaseStatusMeta(editForm[phase.statusKey]).label }}
+            </el-tag>
+          </div>
         </div>
 
         <p v-if="phase.hint" class="detail-workflow-phase__hint">{{ phase.hint }}</p>
@@ -129,7 +129,7 @@ async function handleSave() {
             <el-select
               :model-value="editForm[phase.statusKey]"
               size="small"
-              :disabled="!phase.editable"
+              :disabled="!phase.editable || saving"
               style="width: 100%"
               @update:model-value="(value) => handleStatusChange(phase, value)"
             >
@@ -150,7 +150,7 @@ async function handleSave() {
               size="small"
               placeholder="选择开始时间"
               :value-format="DetailWorkflowForm.DATETIME_FORMAT"
-              :disabled="!phase.editable || !DetailWorkflowForm.isTimeFieldEnabled(editForm[phase.statusKey], 'started')"
+              :disabled="!phase.editable || saving || !DetailWorkflowForm.isTimeFieldEnabled(editForm[phase.statusKey], 'started')"
               style="width: 100%"
             />
           </div>
@@ -163,7 +163,7 @@ async function handleSave() {
               size="small"
               placeholder="选择完成时间"
               :value-format="DetailWorkflowForm.DATETIME_FORMAT"
-              :disabled="!phase.editable || !DetailWorkflowForm.isTimeFieldEnabled(editForm[phase.statusKey], 'completed')"
+              :disabled="!phase.editable || saving || !DetailWorkflowForm.isTimeFieldEnabled(editForm[phase.statusKey], 'completed')"
               style="width: 100%"
             />
           </div>
@@ -228,6 +228,13 @@ async function handleSave() {
 }
 
 .detail-workflow-phase__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-workflow-phase__head-actions {
   display: flex;
   align-items: center;
   gap: 8px;

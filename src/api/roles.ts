@@ -13,6 +13,7 @@ export interface CreateRolePayload {
   description?: string
   status?: RoleStatus
   permissionIds?: string[]
+  assignedWorkshops?: string[]
   assignedPersonnelIds?: string[]
 }
 
@@ -22,6 +23,7 @@ export interface UpdateRolePayload {
   description?: string
   status?: RoleStatus
   permissionIds?: string[]
+  assignedWorkshops?: string[]
   assignedPersonnelIds?: string[]
 }
 

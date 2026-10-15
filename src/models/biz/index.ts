@@ -1,5 +1,5 @@
 export { BusinessSystemConfig } from './BusinessSystemConfig'
-export type { LocalWorkPathConfig, WorkPathPatternConfig } from './BusinessSystemConfig'
+export type { ArchiveTemplatePathConfig, LocalWorkPathConfig, WorkPathPatternConfig } from './BusinessSystemConfig'
 export { ProjectWorkPath } from './ProjectWorkPath'
 export { SystemConfigForm } from './SystemConfigForm'
 export type { SystemConfigFormData } from './SystemConfigForm'

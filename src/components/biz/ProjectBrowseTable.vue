@@ -3,12 +3,15 @@ import '@/styles/biz-data-table.css'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import LocalWorkPathCell from '@/components/biz/LocalWorkPathCell.vue'
-import TagCell from '@/components/biz/TagCell.vue'
 import ProjectPersonnelCell from '@/components/biz/ProjectPersonnelCell.vue'
+import ProjectPersonnelColumnHeader from '@/components/biz/ProjectPersonnelColumnHeader.vue'
+import ProjectFlowStatusColumnHeader from '@/components/biz/ProjectFlowStatusColumnHeader.vue'
+import ProjectNatureColumnHeader from '@/components/biz/ProjectNatureColumnHeader.vue'
 import { ProjectForm } from '@/models/biz/project'
 import { ContactForm } from '@/models/biz/contact'
-import { BIZ_ROUTES, buildContactRouteQuery } from '@/models/biz/navigation'
+import { resolveContactLinkPath, buildContactRouteQuery } from '@/models/biz/navigation'
 import type { ProjectContactLink, ProjectNatureCode, ProjectRecord } from '@/models/biz/project'
+import type { PersonnelRecord } from '@/models/personnel'
 
 const props = withDefaults(
   defineProps<{
@@ -16,6 +19,7 @@ const props = withDefaults(
     loading?: boolean
     showNature?: boolean
     showPersonnel?: boolean
+    personnelOptions?: PersonnelRecord[]
     highlightedProjectNo?: string
     tableHeight?: string | number
   }>(),
@@ -26,8 +30,16 @@ const props = withDefaults(
   },
 )
 
+const assignedPersonnelId = defineModel<string>('assignedPersonnelId', { default: '' })
+const flowStatusFilter = defineModel<string[]>('flowStatusFilter', { default: () => [] })
+const natureFilter = defineModel<string[]>('natureFilter', { default: () => [] })
+
 const tableRef = ref()
 defineExpose({ tableRef })
+
+const emit = defineEmits<{
+  columnFilterChange: []
+}>()
 
 const router = useRouter()
 
@@ -67,7 +79,7 @@ function getContactLinkSummary(links: ProjectContactLink[], row: ProjectRecord) 
 
 function goToContactBrowse(contactFormId: string) {
   router.push({
-    path: BIZ_ROUTES.contactBrowse,
+    path: resolveContactLinkPath(router.currentRoute.value.path),
     query: buildContactRouteQuery(contactFormId),
   })
 }
@@ -116,16 +128,19 @@ function handleContactTagClick(link: ProjectContactLink) {
     </el-table-column>
     <el-table-column label="项目号" width="130" class-name="text-column">
       <template #default="{ row }">
-        {{ ProjectForm.getDisplayProjectNo(toProjectRecord(row)) }}
+        <span
+          class="project-no-text"
+          :class="{ 'is-urgent': ProjectForm.hasUrgentContact(toProjectRecord(row)) }"
+        >
+          {{ ProjectForm.getDisplayProjectNo(toProjectRecord(row)) }}
+        </span>
       </template>
     </el-table-column>
     <el-table-column prop="name" label="项目名称" min-width="180" show-overflow-tooltip />
-    <el-table-column label="标签" width="140" class-name="tag-column">
-      <template #default="{ row }">
-        <TagCell :tags="toProjectRecord(row).tags" />
+    <el-table-column v-if="showNature" width="130" class-name="tag-column nature-column">
+      <template #header>
+        <ProjectNatureColumnHeader v-model="natureFilter" @change="emit('columnFilterChange')" />
       </template>
-    </el-table-column>
-    <el-table-column v-if="showNature" label="项目性质" width="130" class-name="tag-column nature-column">
       <template #default="{ row }">
         <div class="nature-cell" :class="{ 'is-empty': !toProjectRecord(row).natures.length }">
           <el-tooltip
@@ -158,15 +173,23 @@ function handleContactTagClick(link: ProjectContactLink) {
     </el-table-column>
     <el-table-column
       v-if="showPersonnel"
-      label="分配人员"
-      min-width="160"
+      width="120"
       class-name="tag-column personnel-column"
     >
+      <template #header>
+        <ProjectPersonnelColumnHeader
+          v-model:assigned-personnel-id="assignedPersonnelId"
+          :personnel-options="personnelOptions || []"
+        />
+      </template>
       <template #default="{ row }">
         <ProjectPersonnelCell :personnel="row.assignedPersonnel || []" />
       </template>
     </el-table-column>
-    <el-table-column label="流程状态" min-width="150" class-name="tag-column">
+    <el-table-column min-width="150" class-name="tag-column">
+      <template #header>
+        <ProjectFlowStatusColumnHeader v-model="flowStatusFilter" @change="emit('columnFilterChange')" />
+      </template>
       <template #default="{ row }">
         <div class="flow-status-tag-list">
           <el-tag
@@ -191,7 +214,7 @@ function handleContactTagClick(link: ProjectContactLink) {
     />
     <el-table-column
       label="本地路径"
-      width="88"
+      width="116"
       align="center"
       fixed="right"
       class-name="local-path-column"

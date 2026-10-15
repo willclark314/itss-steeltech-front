@@ -2,6 +2,9 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { updateProject } from '@/api/projects'
+import { fetchSystemConfig } from '@/api/system'
+import { BusinessSystemConfig } from '@/models/biz'
+import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
 import { ProjectForm } from '@/models/biz/project'
 import type { ProjectNatureCode, ProjectRecord } from '@/models/biz/project'
 
@@ -44,8 +47,19 @@ async function handlePopoverHide() {
 
   saving.value = true
   try {
+    const systemConfig = await fetchSystemConfig().catch(() => null)
+    const pathPatterns =
+      systemConfig?.localWorkPath.pathPatterns ?? BusinessSystemConfig.DEFAULT_PATH_PATTERNS
+    const syncedPaths = ProjectWorkPath.syncWorkPathsForNatures(
+      { ...props.project, natures: nextNatures },
+      props.project.natures,
+      pathPatterns,
+    )
     const updated = await updateProject(props.project.projectNo, {
       natures: nextNatures,
+      designWorkPath: syncedPaths.designWorkPath,
+      detailWorkPath: syncedPaths.detailWorkPath,
+      localWorkPath: syncedPaths.localWorkPath,
     })
     emit('updated', updated)
   } catch (error) {

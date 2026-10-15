@@ -24,6 +24,7 @@ const emit = defineEmits<{
 const detailPopoverVisible = ref(false)
 const detailSaving = ref(false)
 const detailForm = reactive<DetailWorkflowEditForm>({
+  plateLayoutEnabled: true,
   modelingStatus: 'not_started',
   modelingStartedAt: '',
   modelingCompletedAt: '',
@@ -46,7 +47,7 @@ const segments = computed(() =>
 )
 
 const detailPhaseRows = computed(() =>
-  DetailWorkflowForm.getEditablePhaseRows(props.project.natures),
+  DetailWorkflowForm.getEditablePhaseRows(detailForm),
 )
 
 function segmentKey(segment: MyProjectFlowSegment, index: number) {
@@ -127,6 +128,10 @@ async function handleSimpleDetailProgressChange(phase: NatureProgressPhase) {
       ),
     '细化进度已保存',
   )
+}
+
+function handlePlateLayoutEnabledChange(value: string | number | boolean) {
+  DetailWorkflowForm.applyPlateLayoutEnabledChange(detailForm, Boolean(value))
 }
 
 function handleDetailStatusChange(
@@ -244,7 +249,7 @@ async function handleDetailWorkflowSave() {
         v-else-if="segment.kind === 'detail' && segment.editable && segment.usesDetailWorkflow"
         v-model:visible="detailPopoverVisible"
         placement="bottom-start"
-        :width="320"
+        :width="400"
         trigger="click"
         popper-class="my-detail-workflow-popover"
         @show="resetDetailForm"
@@ -269,14 +274,30 @@ async function handleDetailWorkflowSave() {
             class="my-detail-workflow-editor__phase"
           >
             <div class="my-detail-workflow-editor__phase-head">
-              <span>{{ phase.label }}</span>
-              <el-tag
-                size="small"
-                :type="DetailWorkflowForm.getPhaseStatusMeta(detailForm[phase.statusKey]).type"
-              >
-                {{ DetailWorkflowForm.getPhaseStatusMeta(detailForm[phase.statusKey]).label }}
-              </el-tag>
+              <span>
+                {{ phase.label }}
+                <span v-if="phase.key === 'plate_layout'" class="my-detail-workflow-editor__sublabel">（钢板）</span>
+              </span>
+              <div class="my-detail-workflow-editor__phase-actions">
+                <el-switch
+                  v-if="phase.key === 'plate_layout'"
+                  :model-value="detailForm.plateLayoutEnabled"
+                  inline-prompt
+                  active-text="启用"
+                  inactive-text="关闭"
+                  :disabled="detailSaving"
+                  :teleported="false"
+                  @update:model-value="handlePlateLayoutEnabledChange"
+                />
+                <el-tag
+                  size="small"
+                  :type="DetailWorkflowForm.getPhaseStatusMeta(detailForm[phase.statusKey]).type"
+                >
+                  {{ DetailWorkflowForm.getPhaseStatusMeta(detailForm[phase.statusKey]).label }}
+                </el-tag>
+              </div>
             </div>
+            <p v-if="phase.hint" class="my-detail-workflow-editor__hint">{{ phase.hint }}</p>
             <el-select
               :model-value="detailForm[phase.statusKey]"
               size="small"
@@ -292,6 +313,42 @@ async function handleDetailWorkflowSave() {
                 :value="option"
               />
             </el-select>
+            <div class="my-detail-workflow-editor__times">
+              <div class="my-detail-workflow-editor__time-field">
+                <span>开始时间</span>
+                <el-date-picker
+                  v-model="detailForm[phase.startedAtKey]"
+                  type="datetime"
+                  size="small"
+                  placeholder="选择开始时间"
+                  :value-format="DetailWorkflowForm.DATETIME_FORMAT"
+                  :disabled="
+                    !phase.editable ||
+                    detailSaving ||
+                    !DetailWorkflowForm.isTimeFieldEnabled(detailForm[phase.statusKey], 'started')
+                  "
+                  :teleported="false"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="my-detail-workflow-editor__time-field">
+                <span>完成时间</span>
+                <el-date-picker
+                  v-model="detailForm[phase.completedAtKey]"
+                  type="datetime"
+                  size="small"
+                  placeholder="选择完成时间"
+                  :value-format="DetailWorkflowForm.DATETIME_FORMAT"
+                  :disabled="
+                    !phase.editable ||
+                    detailSaving ||
+                    !DetailWorkflowForm.isTimeFieldEnabled(detailForm[phase.statusKey], 'completed')
+                  "
+                  :teleported="false"
+                  style="width: 100%"
+                />
+              </div>
+            </div>
           </div>
 
           <div class="my-detail-workflow-editor__footer">
@@ -383,6 +440,38 @@ async function handleDetailWorkflowSave() {
   gap: 8px;
   font-size: 12px;
   color: var(--el-text-color-regular);
+}
+
+.my-detail-workflow-editor__phase-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.my-detail-workflow-editor__sublabel {
+  margin-left: 2px;
+  color: var(--el-text-color-secondary);
+}
+
+.my-detail-workflow-editor__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.my-detail-workflow-editor__times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.my-detail-workflow-editor__time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .my-detail-workflow-editor__footer {

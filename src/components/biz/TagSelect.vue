@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createTag, fetchTags } from '@/api/tags'
-import type { TagRecord } from '@/models/biz/tag'
+import { createTag } from '@/api/tags'
+import { useTagCache } from '@/composables/useTagCache'
 
 const model = defineModel<string[]>({ default: () => [] })
 
@@ -21,21 +21,9 @@ const props = withDefaults(
   },
 )
 
-const loading = ref(false)
-const tagOptions = ref<TagRecord[]>([])
+const { tagOptions, loadTags, addTag } = useTagCache()
 
 const optionMap = computed(() => new Map(tagOptions.value.map((item) => [item.id, item])))
-
-async function loadTags() {
-  loading.value = true
-  try {
-    tagOptions.value = await fetchTags()
-  } catch {
-    tagOptions.value = []
-  } finally {
-    loading.value = false
-  }
-}
 
 async function handleCreateTag(name: string) {
   const normalized = name.trim()
@@ -49,9 +37,7 @@ async function handleCreateTag(name: string) {
   }
   try {
     const created = await createTag(normalized)
-    tagOptions.value = [...tagOptions.value, created].sort((a, b) =>
-      a.name.localeCompare(b.name, 'zh-CN'),
-    )
+    addTag(created)
     if (!model.value.includes(created.id)) {
       model.value = [...model.value, created.id]
     }
@@ -69,7 +55,7 @@ watch(
   (ids) => {
     for (const id of ids) {
       if (!optionMap.value.has(id)) {
-        void loadTags()
+        void loadTags(true)
         break
       }
     }
@@ -88,7 +74,6 @@ watch(
     collapse-tags
     collapse-tags-tooltip
     :disabled="disabled"
-    :loading="loading"
     :placeholder="placeholder"
     :style="{ width }"
     @create="handleCreateTag"

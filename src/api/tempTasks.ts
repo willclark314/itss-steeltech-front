@@ -6,6 +6,8 @@ export interface TempTaskRecord {
   description: string
   startTime: string
   completedAt: string
+  isRelatedProject: boolean
+  relatedProjectNo: string
   createdBy: string
   createdByName: string
   personnelIds: string[]
@@ -20,6 +22,8 @@ export interface TempTaskPayload {
   startTime?: string
   completedAt?: string
   personnelIds?: string[]
+  isRelatedProject?: boolean
+  relatedProjectNo?: string
 }
 
 export interface TempTaskQuery {

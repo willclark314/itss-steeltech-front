@@ -86,7 +86,6 @@ export interface GenerateWorkPathPayload {
   path: string
   template: ProjectNatureCode
   ip?: string
-  drive?: string
   variables?: Record<string, string>
   skipExisting?: boolean
 }
@@ -108,6 +107,23 @@ export function fetchFolderTemplates() {
 export function generateWorkPath(payload: GenerateWorkPathPayload) {
   return request<GenerateWorkPathResult>('/system/generate-work-path', {
     method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export interface NavigationOrderResponse {
+  systems: string[]
+  pages: string[]
+  hiddenPages?: string[]
+}
+
+export function fetchNavigationOrder() {
+  return request<NavigationOrderResponse>('/system/navigation-order')
+}
+
+export function updateNavigationOrder(payload: NavigationOrderResponse) {
+  return request<NavigationOrderResponse>('/system/navigation-order', {
+    method: 'PUT',
     body: JSON.stringify(payload),
   })
 }
