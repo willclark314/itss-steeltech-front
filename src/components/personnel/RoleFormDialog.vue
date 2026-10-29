@@ -74,6 +74,19 @@ function handlePageCheckChange(page: PagePermissionGroup, checked: boolean) {
   form.permissionIds = RoleForm.applyPageAccessToggle(form.permissionIds, page, checked)
 }
 
+function handlePageExtraCheckChange(
+  page: PagePermissionGroup,
+  action: 'view-all',
+  checked: boolean,
+) {
+  form.permissionIds = RoleForm.applyPageExtraToggle(
+    form.permissionIds,
+    page,
+    action,
+    checked,
+  )
+}
+
 const accessiblePageCount = computed(() =>
   RoleForm.countAccessiblePages(permissionGroups.value, form.permissionIds),
 )
@@ -215,7 +228,7 @@ async function handleSubmit() {
           <span class="role-permission-count">已选择 {{ accessiblePageCount }} 个页面</span>
         </div>
         <p class="role-permission-hint">
-          勾选<strong>系统</strong>可全选该系统下所有页面；取消系统勾选将关闭该系统全部页面访问与数据请求，也可单独勾选具体页面。
+          勾选<strong>系统</strong>可全选该系统下所有页面；取消系统勾选将关闭该系统全部页面访问与数据请求，也可单独勾选具体页面。年休页可额外勾选「查看全员」。
         </p>
 
         <div class="permission-panel">
@@ -240,17 +253,45 @@ async function handleSubmit() {
               </el-checkbox>
 
               <div class="permission-page-list">
-                <el-checkbox
+                <div
                   v-for="page in group.pages"
                   :key="page.pageKey"
-                  :model-value="RoleForm.isPageAccessGranted(page, form.permissionIds)"
-                  :disabled="!getPageViewId(page)"
-                  :title="page.path"
-                  class="permission-page-checkbox"
-                  @change="(checked) => handlePageCheckChange(page, Boolean(checked))"
+                  class="permission-page-item"
                 >
-                  {{ page.pageName }}
-                </el-checkbox>
+                  <el-checkbox
+                    :model-value="RoleForm.isPageAccessGranted(page, form.permissionIds)"
+                    :disabled="!getPageViewId(page)"
+                    :title="page.path"
+                    class="permission-page-checkbox"
+                    @change="(checked) => handlePageCheckChange(page, Boolean(checked))"
+                  >
+                    {{ page.pageName }}
+                  </el-checkbox>
+                  <div
+                    v-if="RoleForm.getPageExtraPermissions(page).length"
+                    class="permission-page-extras"
+                  >
+                    <el-checkbox
+                      v-for="extra in RoleForm.getPageExtraPermissions(page)"
+                      :key="extra.id"
+                      :model-value="
+                        RoleForm.isPageExtraGranted(page, extra.action, form.permissionIds)
+                      "
+                      :disabled="!RoleForm.isPageAccessGranted(page, form.permissionIds)"
+                      class="permission-extra-checkbox"
+                      @change="
+                        (checked) =>
+                          handlePageExtraCheckChange(
+                            page,
+                            extra.action as 'view-all',
+                            Boolean(checked),
+                          )
+                      "
+                    >
+                      {{ extra.name }}
+                    </el-checkbox>
+                  </div>
+                </div>
               </div>
             </section>
           </div>
@@ -383,10 +424,17 @@ async function handleSubmit() {
 
 .permission-page-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 8px 16px;
   margin-top: 10px;
   padding-left: 24px;
+}
+
+.permission-page-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .permission-page-checkbox {
@@ -402,6 +450,26 @@ async function handleSubmit() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.permission-page-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 22px;
+}
+
+.permission-extra-checkbox {
+  display: flex;
+  align-items: center;
+  height: auto;
+  margin-right: 0;
+}
+
+.permission-extra-checkbox :deep(.el-checkbox__label) {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 
 .permission-empty {

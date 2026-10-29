@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { updateProject } from '@/api/projects'
 import { fetchSystemConfig } from '@/api/system'
@@ -21,6 +21,16 @@ const natureOptions = ProjectForm.NATURE_OPTIONS
 const popoverVisible = ref(false)
 const saving = ref(false)
 const draftNatures = ref<ProjectNatureCode[]>([])
+/** 首次打开后再挂载勾选器，避免首屏每行预渲染 checkbox 组 */
+const pickerReady = ref(false)
+
+watch(
+  () => props.project.projectNo,
+  () => {
+    pickerReady.value = false
+    popoverVisible.value = false
+  },
+)
 
 function getNatureMeta(nature: ProjectNatureCode) {
   return ProjectForm.getNatureMeta(nature)
@@ -36,6 +46,7 @@ function isSameNatures(left: ProjectNatureCode[], right: ProjectNatureCode[]) {
 }
 
 function handlePopoverShow() {
+  pickerReady.value = true
   syncDraft()
 }
 
@@ -113,7 +124,7 @@ async function handlePopoverHide() {
       </button>
     </template>
 
-    <div class="nature-picker" @click.stop>
+    <div v-if="pickerReady" class="nature-picker" @click.stop>
       <el-checkbox-group v-model="draftNatures">
         <el-checkbox
           v-for="item in natureOptions"

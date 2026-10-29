@@ -67,7 +67,7 @@ function handleClear() {
         </button>
       </template>
 
-      <div class="flow-filter-panel" @click.stop>
+      <div v-if="popoverVisible" class="flow-filter-panel" @click.stop>
         <el-checkbox-group v-model="draftFilters" class="flow-filter-groups">
           <div
             v-for="group in filterGroups"

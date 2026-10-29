@@ -1,9 +1,18 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
-const props = defineProps<{
-  modelValue: string
-  loading?: boolean
-}>()
+import { computed, nextTick, ref } from 'vue'
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    loading?: boolean
+    disabled?: boolean
+    /** date=年月日；month=年月 */
+    type?: 'date' | 'month'
+  }>(),
+  {
+    type: 'date',
+  },
+)
 
 const emit = defineEmits<{
   change: [value: string]
@@ -13,9 +22,17 @@ const editing = ref(false)
 const draftValue = ref('')
 const pickerRef = ref<{ focus?: () => void }>()
 
+const valueFormat = computed(() => (props.type === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'))
+
+const displayText = computed(() => {
+  const text = (props.modelValue || '').trim()
+  if (!text) return ''
+  return props.type === 'month' ? text.slice(0, 7) : text
+})
+
 async function startEdit() {
-  if (props.loading) return
-  draftValue.value = props.modelValue || ''
+  if (props.loading || props.disabled) return
+  draftValue.value = displayText.value
   editing.value = true
   await nextTick()
   pickerRef.value?.focus?.()
@@ -31,7 +48,7 @@ function handlePickerInput(value: string | null) {
 
 function handleCommit(value: string | null) {
   const next = value ?? ''
-  if (next === props.modelValue) return
+  if (next === displayText.value) return
   emit('change', next)
 }
 
@@ -45,22 +62,26 @@ function handleVisibleChange(visible: boolean) {
     v-if="!editing"
     type="button"
     class="date-display"
-    :class="{ 'is-loading': loading, 'is-empty': !modelValue }"
-    :disabled="loading"
+    :class="{
+      'is-loading': loading,
+      'is-empty': !displayText,
+      'is-disabled': disabled,
+    }"
+    :disabled="loading || disabled"
     @click.stop="startEdit"
   >
-    {{ modelValue || '-' }}
+    {{ displayText || '-' }}
   </button>
 
   <el-date-picker
     v-else
     ref="pickerRef"
     v-model="draftValue"
-    type="date"
+    :type="type"
     size="small"
     :disabled="loading"
-    value-format="YYYY-MM-DD"
-    format="YYYY-MM-DD"
+    :value-format="valueFormat"
+    :format="valueFormat"
     clearable
     placeholder="-"
     class="project-date-picker"
@@ -95,8 +116,9 @@ function handleVisibleChange(visible: boolean) {
   color: var(--el-text-color-placeholder);
 }
 
-.date-display.is-loading {
-  cursor: wait;
+.date-display.is-loading,
+.date-display.is-disabled {
+  cursor: not-allowed;
   opacity: 0.6;
 }
 

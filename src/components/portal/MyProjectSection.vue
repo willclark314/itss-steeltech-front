@@ -7,8 +7,8 @@ import DetailWorkflowDatetimeEditCell from '@/components/biz/DetailWorkflowDatet
 import ProjectDateEditCell from '@/components/biz/ProjectDateEditCell.vue'
 import LocalWorkPathCell from '@/components/biz/LocalWorkPathCell.vue'
 import OverflowTooltip from '@/components/biz/OverflowTooltip.vue'
+import ProjectFlowStatusEditCell from '@/components/biz/ProjectFlowStatusEditCell.vue'
 import MyProjectDesignAreaCell from '@/components/portal/MyProjectDesignAreaCell.vue'
-import MyProjectFlowStatusCell from '@/components/portal/MyProjectFlowStatusCell.vue'
 import MyProjectFlowStatusHeader from '@/components/portal/MyProjectFlowStatusHeader.vue'
 import MyProjectModelWeightCell from '@/components/portal/MyProjectModelWeightCell.vue'
 import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
@@ -81,16 +81,13 @@ function hasFlowFilter() {
 }
 
 function buildFilters() {
-  return {
+  return MyProjectForm.buildListFilters({
     keyword: searchForm.keyword,
-    assignedPersonnelId: props.personnelId,
-    ...(hasFlowFilter()
-      ? {
-          flowFilters: [...searchForm.flowFilter],
-          personnelTeam: props.personnelTeam || '',
-        }
-      : {}),
-  }
+    personnelId: props.personnelId,
+    personnelTeam: props.personnelTeam || '',
+    roleCodes: props.personnelRoleCodes ?? [],
+    flowFilters: hasFlowFilter() ? searchForm.flowFilter : undefined,
+  })
 }
 
 function getCachedMatchingFlowFiltered() {
@@ -103,6 +100,7 @@ function getCachedMatchingFlowFiltered() {
 function fetchProjectPage(params: {
   keyword?: string
   assignedPersonnelId?: string
+  natures?: string[]
   flowFilters?: string[]
   personnelTeam?: string
   excludeProjectNos?: string[]
@@ -112,6 +110,7 @@ function fetchProjectPage(params: {
   return fetchProjectList({
     keyword: params.keyword,
     assignedPersonnelId: params.assignedPersonnelId,
+    natures: params.natures,
     flowFilters: params.flowFilters,
     personnelTeam: params.personnelTeam,
     excludeProjectNos: params.excludeProjectNos,
@@ -139,6 +138,7 @@ async function loadProjects(pageNo = 1, force = false) {
         fetchProjectList({
           keyword: params.keyword,
           assignedPersonnelId: params.assignedPersonnelId,
+          natures: params.natures,
           page: params.page,
           pageSize: params.pageSize,
         }),
@@ -223,6 +223,7 @@ async function focusProject(projectNo: string) {
           fetchProjectList({
             keyword: params.keyword,
             assignedPersonnelId: params.assignedPersonnelId,
+            natures: params.natures,
             flowFilters: params.flowFilters,
             personnelTeam: params.personnelTeam,
             anchor: params.anchor,
@@ -261,7 +262,7 @@ function isDrawingTimeApplicable(row: ProjectRecord) {
 }
 
 function getDrawingTimeValue(row: ProjectRecord, field: MyProjectDrawingTimeField) {
-  return (row.detailWorkflow?.[field] || '').trim()
+  return DetailWorkflowForm.normalizeYearMonth(row.detailWorkflow?.[field])
 }
 
 function isDrawingTimeEditable(row: ProjectRecord, field: MyProjectDrawingTimeField) {
@@ -376,9 +377,9 @@ async function handleDrawingTimeChange(
     )
     patchItem(row.projectNo, () => updated)
     emit('projectUpdated', updated)
-    ElMessage.success('调图时间已保存')
+    ElMessage.success('调图年月已保存')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '保存调图时间失败')
+    ElMessage.error(error instanceof Error ? error.message : '保存调图年月失败')
   } finally {
     if (savingDateKey.value === savingKey) {
       savingDateKey.value = ''
@@ -568,9 +569,15 @@ onMounted(() => {
               @change="handleFlowFilterChange" />
           </template>
           <template #default="{ row }">
-            <MyProjectFlowStatusCell :project="toProjectRecord(row)" :personnel-team="personnelTeam || ''"
-              :loading-key="savingStatusKey" @updated="(updated) => handleStatusUpdated(toProjectRecord(row), updated)"
-              @saving="handleStatusSaving" @saved="handleStatusSaved" />
+            <ProjectFlowStatusEditCell
+              :project="toProjectRecord(row)"
+              :personnel-team="personnelTeam || ''"
+              :full-edit-access="false"
+              :loading-key="savingStatusKey"
+              @updated="(updated) => handleStatusUpdated(toProjectRecord(row), updated)"
+              @saving="handleStatusSaving"
+              @saved="handleStatusSaved"
+            />
           </template>
         </el-table-column>
         <el-table-column
@@ -608,7 +615,8 @@ onMounted(() => {
           <el-table-column label="调图开始" width="108" align="center" class-name="date-column">
             <template #default="{ row }">
               <template v-if="isDrawingTimeApplicable(toProjectRecord(row))">
-                <DetailWorkflowDatetimeEditCell
+                <ProjectDateEditCell
+                  type="month"
                   :model-value="getDrawingTimeValue(toProjectRecord(row), 'drawingStartedAt')"
                   :loading="isDrawingTimeSaving(toProjectRecord(row).projectNo, 'drawingStartedAt')"
                   :disabled="!isDrawingTimeEditable(toProjectRecord(row), 'drawingStartedAt')"
@@ -620,7 +628,8 @@ onMounted(() => {
           <el-table-column label="调图结束" width="108" align="center" class-name="date-column">
             <template #default="{ row }">
               <template v-if="isDrawingTimeApplicable(toProjectRecord(row))">
-                <DetailWorkflowDatetimeEditCell
+                <ProjectDateEditCell
+                  type="month"
                   :model-value="getDrawingTimeValue(toProjectRecord(row), 'drawingCompletedAt')"
                   :loading="isDrawingTimeSaving(toProjectRecord(row).projectNo, 'drawingCompletedAt')"
                   :disabled="!isDrawingTimeEditable(toProjectRecord(row), 'drawingCompletedAt')"
@@ -698,7 +707,11 @@ onMounted(() => {
         </template>
         <el-table-column label="本地路径" width="72" align="center" header-align="center" class-name="local-path-column">
           <template #default="{ row }">
-            <LocalWorkPathCell :project="toProjectRecord(row)" @path-updated="handlePathUpdated" />
+            <LocalWorkPathCell
+              :project="toProjectRecord(row)"
+              activate-on-interact
+              @path-updated="handlePathUpdated"
+            />
           </template>
         </el-table-column>
       </el-table>

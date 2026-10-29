@@ -136,9 +136,17 @@ export class DetailWorkflowForm {
   }
 
   static readonly DATETIME_FORMAT = 'YYYY-MM-DD HH:mm:ss'
+  /** 调图阶段仅精确到年月 */
+  static readonly YEAR_MONTH_FORMAT = 'YYYY-MM'
 
   static needsDetailWorkflow(natures: readonly ProjectNatureCode[]) {
     return natures.includes(ProjectForm.NATURE.DETAIL)
+  }
+
+  static normalizeYearMonth(value: string | null | undefined) {
+    const text = (value || '').trim()
+    if (!text) return ''
+    return text.slice(0, 7)
   }
 
   static hasPlateLayoutPhase(
@@ -155,8 +163,8 @@ export class DetailWorkflowForm {
       modelingStartedAt: workflow.modelingStartedAt,
       modelingCompletedAt: workflow.modelingCompletedAt,
       drawingStatus: workflow.drawingStatus,
-      drawingStartedAt: workflow.drawingStartedAt,
-      drawingCompletedAt: workflow.drawingCompletedAt,
+      drawingStartedAt: DetailWorkflowForm.normalizeYearMonth(workflow.drawingStartedAt),
+      drawingCompletedAt: DetailWorkflowForm.normalizeYearMonth(workflow.drawingCompletedAt),
       plateLayoutStatus: workflow.plateLayoutStatus,
       plateLayoutStartedAt: workflow.plateLayoutStartedAt,
       plateLayoutCompletedAt: workflow.plateLayoutCompletedAt,
@@ -164,7 +172,11 @@ export class DetailWorkflowForm {
   }
 
   static toSavePayload(form: DetailWorkflowEditForm): DetailWorkflowEditForm {
-    return { ...form }
+    return {
+      ...form,
+      drawingStartedAt: DetailWorkflowForm.normalizeYearMonth(form.drawingStartedAt),
+      drawingCompletedAt: DetailWorkflowForm.normalizeYearMonth(form.drawingCompletedAt),
+    }
   }
 
   static getEditablePhaseRows(
@@ -335,7 +347,7 @@ export class DetailWorkflowForm {
     value: string,
   ): DetailWorkflowEditForm {
     const form = DetailWorkflowForm.createEditForm(workflow)
-    form[field] = value
+    form[field] = DetailWorkflowForm.normalizeYearMonth(value)
     return DetailWorkflowForm.toSavePayload(form)
   }
 
@@ -354,6 +366,10 @@ export class DetailWorkflowForm {
     if (!text) return '-'
     if (text.length >= 16) return text.slice(5, 16)
     return text
+  }
+
+  static formatWorkflowYearMonthDisplay(value: string | null | undefined) {
+    return DetailWorkflowForm.normalizeYearMonth(value) || '-'
   }
 
   static formatModelWeight(value: number | null | undefined) {

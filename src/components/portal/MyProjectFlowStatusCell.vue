@@ -266,7 +266,7 @@ async function handleDetailWorkflowSave() {
           </el-tag>
         </template>
 
-        <div class="my-detail-workflow-editor" @click.stop>
+        <div v-if="detailPopoverVisible" class="my-detail-workflow-editor" @click.stop>
           <div class="my-detail-workflow-editor__title">细化主流程</div>
           <div
             v-for="phase in detailPhaseRows"
@@ -315,13 +315,22 @@ async function handleDetailWorkflowSave() {
             </el-select>
             <div class="my-detail-workflow-editor__times">
               <div class="my-detail-workflow-editor__time-field">
-                <span>开始时间</span>
+                <span>{{ phase.key === 'drawing' ? '开始年月' : '开始时间' }}</span>
                 <el-date-picker
                   v-model="detailForm[phase.startedAtKey]"
-                  type="datetime"
+                  :type="phase.key === 'drawing' ? 'month' : 'datetime'"
                   size="small"
-                  placeholder="选择开始时间"
-                  :value-format="DetailWorkflowForm.DATETIME_FORMAT"
+                  :placeholder="phase.key === 'drawing' ? '选择开始年月' : '选择开始时间'"
+                  :value-format="
+                    phase.key === 'drawing'
+                      ? DetailWorkflowForm.YEAR_MONTH_FORMAT
+                      : DetailWorkflowForm.DATETIME_FORMAT
+                  "
+                  :format="
+                    phase.key === 'drawing'
+                      ? DetailWorkflowForm.YEAR_MONTH_FORMAT
+                      : DetailWorkflowForm.DATETIME_FORMAT
+                  "
                   :disabled="
                     !phase.editable ||
                     detailSaving ||
@@ -332,13 +341,22 @@ async function handleDetailWorkflowSave() {
                 />
               </div>
               <div class="my-detail-workflow-editor__time-field">
-                <span>完成时间</span>
+                <span>{{ phase.key === 'drawing' ? '完成年月' : '完成时间' }}</span>
                 <el-date-picker
                   v-model="detailForm[phase.completedAtKey]"
-                  type="datetime"
+                  :type="phase.key === 'drawing' ? 'month' : 'datetime'"
                   size="small"
-                  placeholder="选择完成时间"
-                  :value-format="DetailWorkflowForm.DATETIME_FORMAT"
+                  :placeholder="phase.key === 'drawing' ? '选择完成年月' : '选择完成时间'"
+                  :value-format="
+                    phase.key === 'drawing'
+                      ? DetailWorkflowForm.YEAR_MONTH_FORMAT
+                      : DetailWorkflowForm.DATETIME_FORMAT
+                  "
+                  :format="
+                    phase.key === 'drawing'
+                      ? DetailWorkflowForm.YEAR_MONTH_FORMAT
+                      : DetailWorkflowForm.DATETIME_FORMAT
+                  "
                   :disabled="
                     !phase.editable ||
                     detailSaving ||

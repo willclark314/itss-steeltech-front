@@ -783,13 +783,13 @@ export class ProjectForm {
     return filterValues.some((fv) => ProjectForm.matchesFlowFilter(record, fv))
   }
 
-  /** Check whether a record has any of the given nature codes (OR logic). */
+  /** Check whether a record has all of the given nature codes (AND logic). */
   static matchesNatureFilters(
     record: Pick<ProjectRecord, 'natures'>,
     natureFilters: readonly string[],
   ): boolean {
     if (!natureFilters.length) return true
-    return natureFilters.some((nf) => record.natures.includes(nf as ProjectNatureCode))
+    return natureFilters.every((nf) => record.natures.includes(nf as ProjectNatureCode))
   }
 
   /** Check whether a record is assigned to the given personnel (empty id = no filter). */

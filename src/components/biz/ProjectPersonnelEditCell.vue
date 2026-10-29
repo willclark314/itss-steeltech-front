@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { defineAsyncComponent, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { updateProject } from '@/api/projects'
-import PersonnelAssignSelect from '@/components/biz/PersonnelAssignSelect.vue'
 import type { PersonnelRecord } from '@/models/personnel'
 import type { ProjectRecord } from '@/models/biz/project'
+
+const PersonnelAssignSelect = defineAsyncComponent(
+  () => import('@/components/biz/PersonnelAssignSelect.vue'),
+)
 
 const props = defineProps<{
   project: ProjectRecord
@@ -18,6 +21,16 @@ const emit = defineEmits<{
 const popoverVisible = ref(false)
 const saving = ref(false)
 const draftIds = ref<string[]>([])
+/** 首次打开后再挂载人员选择器，避免首屏每行预渲染 */
+const pickerReady = ref(false)
+
+watch(
+  () => props.project.projectNo,
+  () => {
+    pickerReady.value = false
+    popoverVisible.value = false
+  },
+)
 
 function syncDraft() {
   draftIds.value = [...props.project.assignedPersonnelIds]
@@ -31,6 +44,7 @@ function isSameIds(left: string[], right: string[]) {
 }
 
 function handlePopoverShow() {
+  pickerReady.value = true
   syncDraft()
 }
 
@@ -100,7 +114,7 @@ async function handlePopoverHide() {
       </button>
     </template>
 
-    <div class="personnel-picker" @click.stop>
+    <div v-if="pickerReady" class="personnel-picker" @click.stop>
       <PersonnelAssignSelect
         v-model="draftIds"
         :personnel-options="personnelOptions"

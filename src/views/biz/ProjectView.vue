@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import '@/styles/biz-page-card.css'
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { copyProject, createProject, deleteProject, fetchProjectList, splitProject, updateProject } from '@/api/projects'
 import { fetchPersonnelList } from '@/api/personnel'
 import ProjectTable from '@/components/biz/ProjectTable.vue'
-import PersonnelAssignSelect from '@/components/biz/PersonnelAssignSelect.vue'
-import ProjectDetailWorkflowPanel from '@/components/biz/ProjectDetailWorkflowPanel.vue'
-import ProjectContactFormSelect from '@/components/biz/ProjectContactFormSelect.vue'
 import TagSelect from '@/components/biz/TagSelect.vue'
 import { DetailWorkflowForm, ProjectForm } from '@/models/biz/project'
 import { ProjectWorkPath } from '@/models/biz/ProjectWorkPath'
@@ -24,6 +21,17 @@ import type {
 import { BIZ_ROUTES } from '@/models/biz/navigation'
 import { usePaginatedListCache } from '@/composables/usePaginatedListCache'
 import { PAGE_SIZE_OPTIONS } from '@/constants/pagination'
+
+/** 编辑弹窗内重组件按需加载，避免挤进项目管理首屏 chunk */
+const PersonnelAssignSelect = defineAsyncComponent(
+  () => import('@/components/biz/PersonnelAssignSelect.vue'),
+)
+const ProjectDetailWorkflowPanel = defineAsyncComponent(
+  () => import('@/components/biz/ProjectDetailWorkflowPanel.vue'),
+)
+const ProjectContactFormSelect = defineAsyncComponent(
+  () => import('@/components/biz/ProjectContactFormSelect.vue'),
+)
 
 const route = useRoute()
 const router = useRouter()

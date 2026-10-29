@@ -70,6 +70,10 @@ export interface LeaveScope {
   role: 'admin' | 'leader' | 'member'
   editablePersonnelIds: string[]
   team: string
+  /** 可查看全员年休（管理员或 leave:view-all） */
+  canViewAll?: boolean
+  /** 可编辑他人年休（仅管理员） */
+  canEditAll?: boolean
 }
 
 /** 获取当前用户的休假可见范围 */

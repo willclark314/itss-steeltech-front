@@ -11,6 +11,7 @@ import MyProjectSection from '@/components/portal/MyProjectSection.vue'
 import MyTempTaskSection from '@/components/portal/MyTempTaskSection.vue'
 import { ProjectForm } from '@/models/biz/project'
 import type { ProjectRecord } from '@/models/biz/project'
+import { MyProjectForm } from '@/models/portal/MyProjectForm'
 import type { PersonnelRecord } from '@/models/personnel'
 import type { RoleRecord } from '@/models/personnel/RoleForm'
 import { getDisplayName, getUser, isAdminUser } from '@/utils/auth'
@@ -68,6 +69,8 @@ type MyPageTab = 'contact' | 'project' | 'temp-task' | 'calendar'
 
 const calendarProjects = ref<ProjectRecord[]>([])
 const calendarLoading = ref(false)
+const calendarLoadedPersonnelId = ref('')
+let calendarLoadPromise: Promise<void> | null = null
 const activeTab = ref<MyPageTab>('contact')
 
 const contactSectionRef = ref<InstanceType<typeof MyContactSection>>()
@@ -77,11 +80,24 @@ const highlightedContactId = ref('')
 const highlightedProjectNo = ref('')
 const calendarFocusedProjectNo = ref('')
 
+const seesAllDetailProjects = computed(() =>
+  MyProjectForm.shouldSeeAllDetailProjects(activePersonnelRoleCodes.value),
+)
+
+const calendarReady = computed(
+  () =>
+    Boolean(activePersonnelId.value) &&
+    calendarLoadedPersonnelId.value === activePersonnelId.value,
+)
+
 const pageTip = computed(() => {
   if (isAdmin && personnelOptionsLoading.value) {
     return '正在加载员工列表…'
   }
   if (canViewPage.value) {
+    if (seesAllDetailProjects.value) {
+      return `查看 ${activeDisplayName.value} 的联系单、临时任务与日程；项目为全部细化项目`
+    }
     return `查看分配给 ${activeDisplayName.value} 的联系单、项目、临时任务与日程`
   }
   if (isAdmin) {
@@ -112,13 +128,20 @@ async function loadPersonnelOptions() {
 
 async function loadCalendarData() {
   if (!canViewPage.value || !activePersonnelId.value) return
+  const personnelId = activePersonnelId.value
   calendarLoading.value = true
   try {
     const projectResult = await fetchProjectList({
       all: true,
-      assignedPersonnelId: activePersonnelId.value,
+      ...MyProjectForm.buildListFilters({
+        personnelId,
+        personnelTeam: activePersonnelTeam.value,
+        roleCodes: activePersonnelRoleCodes.value,
+      }),
     })
+    if (activePersonnelId.value !== personnelId) return
     calendarProjects.value = projectResult.list
+    calendarLoadedPersonnelId.value = personnelId
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载日历数据失败')
   } finally {
@@ -126,8 +149,23 @@ async function loadCalendarData() {
   }
 }
 
-function focusCalendarToProject(project: ProjectRecord) {
-  calendarPanelRef.value?.focusToProject(project)
+async function ensureCalendarData() {
+  if (calendarReady.value) return
+  if (!calendarLoadPromise) {
+    calendarLoadPromise = loadCalendarData().finally(() => {
+      calendarLoadPromise = null
+    })
+  }
+  await calendarLoadPromise
+}
+
+async function waitForSectionRef<T>(getter: () => T | null | undefined, attempts = 12) {
+  for (let i = 0; i < attempts; i += 1) {
+    const value = getter()
+    if (value) return value
+    await nextTick()
+  }
+  return getter()
 }
 
 async function handleSelectProject(projectNo: string) {
@@ -135,18 +173,19 @@ async function handleSelectProject(projectNo: string) {
   highlightedProjectNo.value = ProjectForm.parseBaseProjectNo(projectNo)
   highlightedContactId.value = ''
   calendarFocusedProjectNo.value = ''
-  await nextTick()
-  await projectSectionRef.value?.focusProject(projectNo)
+  const section = await waitForSectionRef(() => projectSectionRef.value)
+  await section?.focusProject(projectNo)
 }
 
 async function handleProjectSectionSelect(project: ProjectRecord) {
-  activeTab.value = 'calendar'
   const displayNo = ProjectForm.getDisplayProjectNo(project)
   highlightedProjectNo.value = displayNo
   highlightedContactId.value = ''
   calendarFocusedProjectNo.value = displayNo
-  await nextTick()
-  focusCalendarToProject(project)
+  await ensureCalendarData()
+  activeTab.value = 'calendar'
+  const panel = await waitForSectionRef(() => calendarPanelRef.value)
+  panel?.focusToProject(project)
 }
 
 async function handleSelectContact(contactFormId: string) {
@@ -154,8 +193,8 @@ async function handleSelectContact(contactFormId: string) {
   highlightedContactId.value = contactFormId
   highlightedProjectNo.value = ''
   calendarFocusedProjectNo.value = ''
-  await nextTick()
-  await contactSectionRef.value?.focusContact(contactFormId)
+  const section = await waitForSectionRef(() => contactSectionRef.value)
+  await section?.focusContact(contactFormId)
 }
 
 function clearSelection() {
@@ -165,6 +204,7 @@ function clearSelection() {
 }
 
 function handleProjectUpdated(project: ProjectRecord) {
+  if (!calendarReady.value) return
   const index = calendarProjects.value.findIndex((item) => item.projectNo === project.projectNo)
   if (index === -1) {
     calendarProjects.value = [...calendarProjects.value, project]
@@ -176,24 +216,32 @@ function handleProjectUpdated(project: ProjectRecord) {
 }
 
 function handleProjectLeft(projectNo: string) {
+  if (!calendarReady.value) return
   calendarProjects.value = calendarProjects.value.filter((item) => item.projectNo !== projectNo)
   if (calendarFocusedProjectNo.value === ProjectForm.parseBaseProjectNo(projectNo)) {
     calendarFocusedProjectNo.value = ''
   }
 }
 
+watch(activeTab, (tab) => {
+  if (tab === 'calendar') {
+    void ensureCalendarData()
+  }
+})
+
 watch(activePersonnelId, (nextId, prevId) => {
   if (!nextId || nextId === prevId) return
   clearSelection()
-  void loadCalendarData()
+  calendarProjects.value = []
+  calendarLoadedPersonnelId.value = ''
+  if (activeTab.value === 'calendar') {
+    void ensureCalendarData()
+  }
 })
 
 onMounted(async () => {
   if (isAdmin) {
     await loadPersonnelOptions()
-  }
-  if (canViewPage.value) {
-    void loadCalendarData()
   }
 })
 </script>
@@ -231,7 +279,7 @@ onMounted(async () => {
     />
 
     <el-tabs v-else v-model="activeTab" class="my-page-tabs">
-      <el-tab-pane label="我的联系单" name="contact">
+      <el-tab-pane label="我的联系单" name="contact" lazy>
         <MyContactSection
           ref="contactSectionRef"
           :personnel-id="activePersonnelId"
@@ -240,7 +288,7 @@ onMounted(async () => {
           @clear-selection="clearSelection"
         />
       </el-tab-pane>
-      <el-tab-pane label="我的项目" name="project">
+      <el-tab-pane label="我的项目" name="project" lazy>
         <MyProjectSection
           ref="projectSectionRef"
           :personnel-id="activePersonnelId"
@@ -254,10 +302,10 @@ onMounted(async () => {
           @project-left="handleProjectLeft"
         />
       </el-tab-pane>
-      <el-tab-pane label="我的临时任务" name="temp-task">
+      <el-tab-pane label="我的临时任务" name="temp-task" lazy>
         <MyTempTaskSection :personnel-id="activePersonnelId" />
       </el-tab-pane>
-      <el-tab-pane label="我的日程" name="calendar">
+      <el-tab-pane label="我的日程" name="calendar" lazy>
         <MyCalendarPanel
           ref="calendarPanelRef"
           :projects="calendarProjects"

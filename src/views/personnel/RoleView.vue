@@ -221,7 +221,7 @@ async function handleDelete(row: RoleRecord) {
                   size="small"
                   :title="page.path"
                 >
-                  {{ page.pageName }}
+                  {{ RoleForm.formatPagePermissionLabel(page, row.permissionIds) }}
                 </el-tag>
               </div>
             </div>

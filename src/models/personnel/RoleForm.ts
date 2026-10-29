@@ -4,7 +4,7 @@ import { getModuleOrderMap, getPageOrderMap } from '@/utils/navigationOrder'
 import { PersonnelForm } from './PersonnelForm'
 
 export type RoleStatus = 'active' | 'inactive'
-export type PermissionAction = 'view' | 'edit'
+export type PermissionAction = 'view' | 'view-all' | 'edit'
 
 export interface PermissionRecord {
   id: string
@@ -92,7 +92,7 @@ export class RoleForm {
     code: [{ required: true, message: '请输入角色编码', trigger: 'blur' }],
   }
 
-  static readonly ACTION_ORDER: PermissionAction[] = ['view', 'edit']
+  static readonly ACTION_ORDER: PermissionAction[] = ['view', 'view-all', 'edit']
 
   static readonly MODULE_ORDER: string[] = [...new Set(APP_PAGES.map((page) => page.module))]
 
@@ -280,7 +280,7 @@ export class RoleForm {
     )
   }
 
-  /** 页面访问开关：开启授予 view，关闭移除该页面全部权限（含历史 edit） */
+  /** 页面访问开关：开启授予 view，关闭移除该页面全部权限（含 view-all / 历史 edit） */
   static applyPageAccessToggle(
     permissionIds: string[],
     page: PagePermissionGroup,
@@ -295,6 +295,46 @@ export class RoleForm {
       for (const id of pageIds) next.delete(id)
     }
     return [...next]
+  }
+
+  /** 页面除「查看」外的附加权限（如年休「查看全员」） */
+  static getPageExtraPermissions(page: PagePermissionGroup): PermissionRecord[] {
+    return page.permissions.filter((item) => item.action !== 'view')
+  }
+
+  static isPageExtraGranted(
+    page: PagePermissionGroup,
+    action: PermissionAction,
+    permissionIds: string[],
+  ): boolean {
+    const perm = RoleForm.getPagePermission(page, action)
+    return Boolean(perm && permissionIds.includes(perm.id))
+  }
+
+  /** 附加权限开关：勾选时自动带上页面 view */
+  static applyPageExtraToggle(
+    permissionIds: string[],
+    page: PagePermissionGroup,
+    action: PermissionAction,
+    checked: boolean,
+  ): string[] {
+    const perm = RoleForm.getPagePermission(page, action)
+    if (!perm) return permissionIds
+    const next = new Set(permissionIds)
+    if (checked) {
+      next.add(perm.id)
+      const view = RoleForm.getPagePermission(page, 'view')
+      if (view) next.add(view.id)
+    } else {
+      next.delete(perm.id)
+    }
+    return [...next]
+  }
+
+  static formatPagePermissionLabel(page: PagePermissionGroup, permissionIds: string[]): string {
+    const hasViewAll = RoleForm.isPageExtraGranted(page, 'view-all', permissionIds)
+    if (hasViewAll) return `${page.pageName}（全员）`
+    return page.pageName
   }
 
   static formatWorkshopLabel(workshop: string) {

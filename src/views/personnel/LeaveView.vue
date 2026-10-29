@@ -43,7 +43,13 @@ const pageRole = ref<'admin' | 'member'>('member')
 const viewMode = ref<'pending' | 'admin' | 'member'>('pending')
 
 const isPageAdmin = computed(() => viewMode.value === 'admin')
+const canEditAll = computed(() => scope.value?.canEditAll === true)
 const scopedPersonnelId = computed(() => scope.value?.personnelId ?? '')
+
+function canEditPersonnel(personnelId: string) {
+  if (canEditAll.value) return true
+  return Boolean(personnelId) && personnelId === scopedPersonnelId.value
+}
 
 function filterEntriesForScope<T extends { personnelId: string }>(entries: T[]): T[] {
   if (isPageAdmin.value) return entries
@@ -431,12 +437,15 @@ const pageReady = computed(() => {
   return memberReady.value && calendarData.value !== null
 })
 
-/** 双重校验：localStorage 非管理员则强制员工视图，忽略后端误报的 admin */
+/** 全员视图：后端 canViewAll，或管理员角色且可编辑多人 */
 function resolveViewMode(nextScope: LeaveScope): 'admin' | 'member' {
-  if (!isAdminUser()) return 'member'
-  if (nextScope.role !== 'admin') return 'member'
-  if (nextScope.editablePersonnelIds.length <= 1) return 'member'
-  return 'admin'
+  if (nextScope.canViewAll) return 'admin'
+  if (nextScope.role === 'admin' && nextScope.editablePersonnelIds.length > 1) {
+    // 防御：localStorage 非管理员时不信任后端误报的 admin
+    if (!isAdminUser()) return 'member'
+    return 'admin'
+  }
+  return 'member'
 }
 
 /** 日历组件 key：换年或换用户时强制重建，避免残留渲染 */
@@ -823,6 +832,11 @@ function buildDtoLookup(data: LeaveCalendarResponse) {
 }
 
 function openEditForEvent(event: CalendarDayCell['events'][number]) {
+  if (!canEditPersonnel(event.personnelId)) {
+    ElMessage.info('当前角色仅可查看全员年休，不能编辑他人记录')
+    return
+  }
+
   const lookup = isPageAdmin.value
     ? (calendarData.value ? buildDtoLookup(calendarData.value) : new Map<string, LeaveEntryDTO>())
     : memberDtoLookup.value
@@ -853,6 +867,11 @@ function openEditForEvent(event: CalendarDayCell['events'][number]) {
 function openNewLeaveDialog(personnelId?: string) {
   const pid = personnelId ?? scopedPersonnelId.value
   if (!pid) return
+  if (!canEditPersonnel(pid)) {
+    ElMessage.info('当前角色仅可查看全员年休，不能为他人新建请假')
+    closeContextMenu()
+    return
+  }
   editingEntry.value = null
   editingPerson.value = personnelList.value.find((p) => p.id === pid) ?? null
   dialogVisible.value = true
@@ -917,6 +936,11 @@ async function persistLeavePolicy(
 }
 
 function openPolicyDialog(personnelId: string) {
+  if (!canEditPersonnel(personnelId)) {
+    ElMessage.info('当前角色仅可查看全员年休，不能编辑他人休假策略')
+    closeContextMenu()
+    return
+  }
   const person = personnelList.value.find((p) => p.id === personnelId)
   if (!person) return
   policyEditingPerson.value = person
@@ -1255,6 +1279,7 @@ onBeforeUnmount(() => {
             取消仅显示
           </button>
           <button
+            v-if="canEditPersonnel(ctxMenuTarget!)"
             type="button"
             class="ctx-menu-item"
             @click="openNewLeaveDialog(ctxMenuTarget!)"
@@ -1263,6 +1288,7 @@ onBeforeUnmount(() => {
             新建请假
           </button>
           <button
+            v-if="canEditPersonnel(ctxMenuTarget!)"
             type="button"
             class="ctx-menu-item"
             @click="openPolicyDialog(ctxMenuTarget!)"

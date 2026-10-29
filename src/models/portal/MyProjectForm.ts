@@ -44,6 +44,14 @@ export class MyProjectForm {
     return roleCodes.includes(MY_PROJECT_PLATE_LAYOUT_OPERATOR_ROLE)
   }
 
+  /** 调图员 / 排板员应看到全部细化性质项目，而非仅本人被分配的项目 */
+  static shouldSeeAllDetailProjects(roleCodes: readonly string[]) {
+    return (
+      MyProjectForm.isDrawingOperator(roleCodes) ||
+      MyProjectForm.isPlateLayoutOperator(roleCodes)
+    )
+  }
+
   static isDesignTeam(personnelTeam = '') {
     return personnelTeam === MY_PROJECT_DESIGN_TEAM
   }
@@ -56,6 +64,32 @@ export class MyProjectForm {
     if (MyProjectForm.isPlateLayoutOperator(roleCodes)) return 'plate_layout'
     if (personnelTeam === MY_PROJECT_DESIGN_TEAM) return 'design'
     return 'actual'
+  }
+
+  /** 「我的项目」列表查询条件：特殊角色看全部细化项目，其余按分配人过滤 */
+  static buildListFilters(options: {
+    keyword?: string
+    personnelId: string
+    personnelTeam?: string
+    roleCodes?: readonly string[]
+    flowFilters?: readonly string[]
+  }) {
+    const roleCodes = options.roleCodes ?? []
+    const seeAllDetail = MyProjectForm.shouldSeeAllDetailProjects(roleCodes)
+    const flowFilters = options.flowFilters?.length ? [...options.flowFilters] : undefined
+
+    return {
+      keyword: options.keyword || undefined,
+      ...(seeAllDetail
+        ? { natures: [ProjectForm.NATURE.DETAIL] }
+        : { assignedPersonnelId: options.personnelId }),
+      ...(flowFilters
+        ? {
+            flowFilters,
+            personnelTeam: options.personnelTeam || '',
+          }
+        : {}),
+    }
   }
 
   static canEditDesignProgress(
